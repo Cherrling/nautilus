@@ -27,12 +27,6 @@ option(
 # Features #
 ############
 option(
-  'libportal',
-  type: 'boolean',
-  value: true,
-  description: 'Enable using xdg-desktop-portals for desktop integration',
-)
-option(
   'packagekit',
   type: 'boolean',
   value: true,
@@ -44,6 +38,12 @@ option(
   value: false,
   description: 'Enable SELinux context support in file properties dialog',
 )
+option(
+  'cloudproviders',
+  type: 'boolean',
+  value: true,
+  description: 'Enable the cloudproviders support',
+)
 ################
 # End features #
 ################
@@ -51,12 +51,6 @@ option(
 ###########
 # Testing #
 ###########
-option(
-  'profiling',
-  type: 'boolean',
-  value: false,
-  description: 'Enable performance profiling',
-)
 option(
   'tests',
   type: 'combo',

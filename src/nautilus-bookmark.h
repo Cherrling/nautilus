@@ -40,18 +40,14 @@ GFile *               nautilus_bookmark_get_location           (NautilusBookmark
 char *                nautilus_bookmark_get_uri                (NautilusBookmark      *bookmark);
 GIcon *               nautilus_bookmark_get_icon               (NautilusBookmark      *bookmark);
 GIcon *               nautilus_bookmark_get_symbolic_icon      (NautilusBookmark      *bookmark);
-gboolean              nautilus_bookmark_get_xdg_type           (NautilusBookmark      *bookmark,
-								GUserDirectory        *directory);
-gboolean              nautilus_bookmark_get_is_builtin         (NautilusBookmark      *bookmark);
 gboolean              nautilus_bookmark_get_has_custom_name    (NautilusBookmark      *bookmark);
 int                   nautilus_bookmark_compare_with           (gconstpointer          a,
 								gconstpointer          b);
 
-void                  nautilus_bookmark_set_scroll_pos         (NautilusBookmark      *bookmark,
-								const char            *uri);
-char *                nautilus_bookmark_get_scroll_pos         (NautilusBookmark      *bookmark);
-
-/* Helper functions for displaying bookmarks */
-GtkWidget *           nautilus_bookmark_menu_item_new          (NautilusBookmark      *bookmark);
+void                  nautilus_bookmark_take_selected_uris     (NautilusBookmark      *bookmark,
+								GStrv                  selected_uris);
+GStrv                 nautilus_bookmark_get_selected_uris      (NautilusBookmark      *bookmark);
+void                  nautilus_bookmark_set_name               (NautilusBookmark      *bookmark,
+                                                                const char            *new_name);
 
 G_END_DECLS

@@ -1,20 +1,10 @@
-resources = gnome.compile_resources(
-  'nautilus-audio-video-properties-resources',
-  join_paths(
-    'resources', 'nautilus-audio-video-properties.gresource.xml'
-  ),
-  source_dir: 'resources',
-  c_name: 'nautilus_audio_video_properties',
-)
-
 libm = cc.find_library('m')
 
 libtotem_properties_page_sources = files(
   'totem-properties-main.c',
   'totem-properties-view.c',
-  'bacon-video-widget-properties.c',
   'totem-gst-helpers.c',
-) + resources
+)
 
 libtotem_properties_page_deps = [
   libm,
@@ -34,20 +24,3 @@ libtotem_properties_page = shared_module(
   install: true,
   install_dir: extensiondir
 )
-
-test_properties_page_sources = files(
-  'totem-properties-main.c',
-  'totem-properties-view.c',
-  'bacon-video-widget-properties.c',
-  'totem-gst-helpers.c',
-  'test-properties-page.c'
-) + resources
-
-executable(
-  'test-properties-page',
-  test_properties_page_sources,
-  dependencies: libtotem_properties_page_deps + [
-    nautilus_extension
-  ],
-)
-

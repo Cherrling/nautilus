@@ -1,4 +1,5 @@
 #include "test-utilities.h"
+#include <src/nautilus-tag-manager.h>
 
 static void
 test_copy_one_file (void)
@@ -13,17 +14,17 @@ test_copy_one_file (void)
     create_one_file ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
-    g_assert_true (first_dir != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (file, NULL));
     files = g_list_prepend (files, g_object_ref (file));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -48,17 +49,17 @@ test_copy_one_file_undo (void)
     create_one_file ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
-    g_assert_true (first_dir != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (file, NULL));
     files = g_list_prepend (files, g_object_ref (file));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -85,16 +86,16 @@ test_copy_one_empty_directory (void)
     create_one_empty_directory ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
     first_dir = g_file_get_child (root, "copy_first_dir");
-    g_assert_true (first_dir != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (file, NULL));
     files = g_list_prepend (files, g_object_ref (file));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -119,16 +120,16 @@ test_copy_one_empty_directory_undo (void)
     create_one_empty_directory ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
     first_dir = g_file_get_child (root, "copy_first_dir");
-    g_assert_true (first_dir != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (file, NULL));
     files = g_list_prepend (files, g_object_ref (file));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -144,43 +145,67 @@ test_copy_one_empty_directory_undo (void)
 }
 
 static void
+copy_multiple_files (const gchar *prefix,
+                     GFile       *src,
+                     GFile       *dest,
+                     guint        num)
+{
+    g_autolist (GFile) files = NULL;
+
+    for (guint i = 0; i < num; i++)
+    {
+        g_autofree gchar *file_name = g_strdup_printf ("%s_%i", prefix, i);
+        GFile *file = g_file_get_child (src, file_name);
+
+        g_assert_true (g_file_query_exists (file, NULL));
+        files = g_list_prepend (files, file);
+    }
+
+    nautilus_file_operations_copy_sync (files, dest);
+}
+
+static void
+verify_multiple_copies_existance (const gchar *prefix,
+                                  GFile       *src,
+                                  GFile       *dest,
+                                  guint        num,
+                                  gboolean     copies_exist)
+{
+    for (guint i = 0; i < num; i++)
+    {
+        g_autofree gchar *file_name = g_strdup_printf ("%s_%i", prefix, i);
+        g_autoptr (GFile) file_in_source = g_file_get_child (src, file_name);
+        g_autoptr (GFile) file_in_destination = g_file_get_child (dest, file_name);
+
+        g_assert_true (g_file_query_exists (file_in_source, NULL));
+        if (copies_exist)
+        {
+            g_assert_true (g_file_query_exists (file_in_destination, NULL));
+        }
+        else
+        {
+            g_assert_false (g_file_query_exists (file_in_destination, NULL));
+        }
+    }
+}
+
+static void
 test_copy_files_small (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 10);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 10);
 
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 10, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -191,42 +216,21 @@ static void
 test_copy_files_small_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 10);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 10);
 
     test_operation_undo ();
 
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 10, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -237,40 +241,19 @@ static void
 test_copy_files_medium (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 1000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 1000);
 
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 1000, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -281,41 +264,21 @@ static void
 test_copy_files_medium_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 1000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 1000);
+
     test_operation_undo ();
 
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 1000, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -326,38 +289,19 @@ static void
 test_copy_files_large (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 10000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 10000);
 
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 10000, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -368,42 +312,21 @@ static void
 test_copy_files_large_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_files ("copy", 10000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
-
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    g_assert_true (g_file_query_exists (root, NULL));
 
     dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_file", root, dir, 10000);
 
     test_operation_undo ();
 
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_file", root, dir, 10000, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -414,40 +337,19 @@ static void
 test_copy_directories_small (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 10);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    copy_multiple_files ("copy_dir", root, dir, 10);
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
-
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 10, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -458,42 +360,21 @@ static void
 test_copy_directories_small_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 10);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
-
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_dir", root, dir, 10);
 
     test_operation_undo ();
 
-    for (int i = 0; i < 10; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 10, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -504,40 +385,19 @@ static void
 test_copy_directories_medium (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 1000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    copy_multiple_files ("copy_dir", root, dir, 1000);
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
-
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 1000, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -548,42 +408,21 @@ static void
 test_copy_directories_medium_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 1000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
-
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_dir", root, dir, 1000);
 
     test_operation_undo ();
 
-    for (int i = 0; i < 1000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 1000, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -594,40 +433,19 @@ static void
 test_copy_directories_large (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 10000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (file != NULL);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
+    copy_multiple_files ("copy_dir", root, dir, 10000);
 
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
-
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 10000, TRUE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 
@@ -638,42 +456,21 @@ static void
 test_copy_directories_large_undo (void)
 {
     g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
     g_autoptr (GFile) dir = NULL;
-    g_autolist (GFile) files = NULL;
-    gchar *file_name;
 
     create_multiple_directories ("copy", 10000);
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (root, file_name);
-        g_assert_true (file != NULL);
-        g_free (file_name);
-        files = g_list_prepend (files, g_object_ref (file));
-    }
+    dir = g_file_get_child (root, "copy_destination_dir");
+    g_assert_true (g_file_query_exists (dir, NULL));
 
-    dir = g_file_get_child (root, "copy_dir");
-    g_assert_true (dir != NULL);
-
-    nautilus_file_operations_copy_sync (files,
-                                        dir);
+    copy_multiple_files ("copy_dir", root, dir, 10000);
 
     test_operation_undo ();
 
-    for (int i = 0; i < 10000; i++)
-    {
-        file_name = g_strdup_printf ("copy_file_%i", i);
-        file = g_file_get_child (dir, file_name);
-        g_assert_false (g_file_query_exists (file, NULL));
-        file = g_file_get_child (root, file_name);
-        g_free (file_name);
-        g_assert_true (g_file_query_exists (file, NULL));
-    }
+    verify_multiple_copies_existance ("copy_dir", root, dir, 10000, FALSE);
 
     g_assert_true (g_file_query_exists (dir, NULL));
 }
@@ -696,17 +493,14 @@ test_copy_full_directory (void)
     create_one_file ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -736,17 +530,14 @@ test_copy_full_directory_undo (void)
     create_one_file ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -784,19 +575,14 @@ test_copy_first_hierarchy (void)
     create_first_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_child");
-    g_assert_true (file != NULL);
-    file = g_file_get_child (first_dir, "copy_second_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -833,19 +619,14 @@ test_copy_first_hierarchy_undo (void)
     create_first_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_child");
-    g_assert_true (file != NULL);
-    file = g_file_get_child (first_dir, "copy_second_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -891,15 +672,10 @@ test_copy_second_hierarchy (void)
     root = g_file_new_for_path (test_get_tmp_dir ());
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_child");
-    g_assert_true (file != NULL);
-    file = g_file_get_child (file, "copy_second_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -936,19 +712,14 @@ test_copy_second_hierarchy_undo (void)
     create_second_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_child");
-    g_assert_true (file != NULL);
-    file = g_file_get_child (file, "copy_second_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -993,26 +764,14 @@ test_copy_third_hierarchy (void)
     create_third_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_dir1");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (file, "copy_dir1_child");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_dir2");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (file, "copy_dir2_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -1063,26 +822,14 @@ test_copy_third_hierarchy_undo (void)
     create_third_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_dir1");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (file, "copy_dir1_child");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_dir2");
-    g_assert_true (file != NULL);
-
-    file = g_file_get_child (file, "copy_dir2_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
-    g_assert_true (second_dir != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         second_dir);
@@ -1140,24 +887,18 @@ test_copy_fourth_hierarchy (void)
     create_fourth_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
     files = g_list_prepend (files, g_object_ref (second_dir));
-    g_assert_true (second_dir != NULL);
-
-    file = g_file_get_child (second_dir, "copy_second_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     third_dir = g_file_get_child (root, "copy_third_dir");
-    g_assert_true (third_dir != NULL);
+    g_assert_true (g_file_query_exists (third_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         third_dir);
@@ -1197,24 +938,18 @@ test_copy_fourth_hierarchy_undo (void)
     create_fourth_hierarchy ("copy");
 
     root = g_file_new_for_path (test_get_tmp_dir ());
-    g_assert_true (root != NULL);
+    g_assert_true (g_file_query_exists (root, NULL));
 
     first_dir = g_file_get_child (root, "copy_first_dir");
     files = g_list_prepend (files, g_object_ref (first_dir));
-    g_assert_true (first_dir != NULL);
-
-    file = g_file_get_child (first_dir, "copy_first_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (first_dir, NULL));
 
     second_dir = g_file_get_child (root, "copy_second_dir");
     files = g_list_prepend (files, g_object_ref (second_dir));
-    g_assert_true (second_dir != NULL);
-
-    file = g_file_get_child (second_dir, "copy_second_dir_child");
-    g_assert_true (file != NULL);
+    g_assert_true (g_file_query_exists (second_dir, NULL));
 
     third_dir = g_file_get_child (root, "copy_third_dir");
-    g_assert_true (third_dir != NULL);
+    g_assert_true (g_file_query_exists (third_dir, NULL));
 
     nautilus_file_operations_copy_sync (files,
                                         third_dir);
@@ -1304,9 +1039,11 @@ main (int   argc,
       char *argv[])
 {
     g_autoptr (NautilusFileUndoManager) undo_manager = NULL;
+    g_autoptr (NautilusTagManager) tag_manager = NULL;
     int ret;
 
     undo_manager = nautilus_file_undo_manager_new ();
+    tag_manager = nautilus_tag_manager_new_dummy ();
     g_test_init (&argc, &argv, NULL);
     g_test_set_nonfatal_assertions ();
     nautilus_ensure_extension_points ();

@@ -33,7 +33,7 @@
 
 struct _NautilusXContentBar
 {
-    GtkInfoBar parent_instance;
+    AdwBin parent_instance;
     GtkWidget *label;
 
     char **x_content_types;
@@ -52,7 +52,7 @@ enum
     CONTENT_BAR_RESPONSE_APP = 1
 };
 
-G_DEFINE_TYPE (NautilusXContentBar, nautilus_x_content_bar, GTK_TYPE_INFO_BAR)
+G_DEFINE_TYPE (NautilusXContentBar, nautilus_x_content_bar, ADW_TYPE_BIN)
 
 static void
 content_bar_response_cb (GtkInfoBar *infobar,
@@ -78,7 +78,7 @@ content_bar_response_cb (GtkInfoBar *infobar,
     if (default_app != NULL)
     {
         nautilus_launch_application_for_mount (default_app, bar->mount,
-                                               GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (bar))));
+                                               GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (bar))));
         g_object_unref (default_app);
     }
 }
@@ -146,17 +146,17 @@ nautilus_x_content_bar_set_x_content_types (NautilusXContentBar *bar,
     gtk_label_set_text (GTK_LABEL (bar->label), message);
     g_free (message);
 
-    gtk_widget_show (bar->label);
-
     for (n = 0; bar->x_content_types[n] != NULL; n++)
     {
         const char *name;
         GIcon *icon;
         GtkWidget *image;
+        GtkWidget *info_bar;
         GtkWidget *button;
         GAppInfo *app;
         gboolean has_app;
         guint i;
+        GtkWidget *box;
 
         default_app = g_ptr_array_index (apps, n);
         has_app = FALSE;
@@ -179,7 +179,7 @@ nautilus_x_content_bar_set_x_content_types (NautilusXContentBar *bar,
         icon = g_app_info_get_icon (default_app);
         if (icon != NULL)
         {
-            image = gtk_image_new_from_gicon (icon, GTK_ICON_SIZE_BUTTON);
+            image = gtk_image_new_from_gicon (icon);
         }
         else
         {
@@ -187,14 +187,17 @@ nautilus_x_content_bar_set_x_content_types (NautilusXContentBar *bar,
         }
 
         name = g_app_info_get_name (default_app);
-        button = gtk_info_bar_add_button (GTK_INFO_BAR (bar),
-                                          name,
-                                          n);
+        info_bar = adw_bin_get_child (ADW_BIN (bar));
+        button = gtk_info_bar_add_button (GTK_INFO_BAR (info_bar), name, n);
+        box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 
-        gtk_button_set_image (GTK_BUTTON (button), image);
-        gtk_button_set_always_show_image (GTK_BUTTON (button), TRUE);
-        gtk_button_set_label (GTK_BUTTON (button), name);
-        gtk_widget_show (button);
+        if (image != NULL)
+        {
+            gtk_box_append (GTK_BOX (box), image);
+        }
+        gtk_box_append (GTK_BOX (box), gtk_label_new (name));
+
+        gtk_button_set_child (GTK_BUTTON (button), box);
     }
 
     g_ptr_array_free (apps, TRUE);
@@ -204,11 +207,7 @@ static void
 nautilus_x_content_bar_set_mount (NautilusXContentBar *bar,
                                   GMount              *mount)
 {
-    if (bar->mount != NULL)
-    {
-        g_object_unref (bar->mount);
-    }
-    bar->mount = mount != NULL ? g_object_ref (mount) : NULL;
+    g_set_object (&bar->mount, mount);
 }
 
 
@@ -317,14 +316,12 @@ nautilus_x_content_bar_class_init (NautilusXContentBarClass *klass)
 static void
 nautilus_x_content_bar_init (NautilusXContentBar *bar)
 {
-    GtkWidget *content_area;
-    GtkWidget *action_area;
+    GtkWidget *info_bar;
     PangoAttrList *attrs;
 
-    content_area = gtk_info_bar_get_content_area (GTK_INFO_BAR (bar));
-    action_area = gtk_info_bar_get_action_area (GTK_INFO_BAR (bar));
-
-    gtk_orientable_set_orientation (GTK_ORIENTABLE (action_area), GTK_ORIENTATION_HORIZONTAL);
+    info_bar = gtk_info_bar_new ();
+    gtk_info_bar_set_message_type (GTK_INFO_BAR (info_bar), GTK_MESSAGE_QUESTION);
+    adw_bin_set_child (ADW_BIN (bar), info_bar);
 
     attrs = pango_attr_list_new ();
     pango_attr_list_insert (attrs, pango_attr_weight_new (PANGO_WEIGHT_BOLD));
@@ -333,9 +330,9 @@ nautilus_x_content_bar_init (NautilusXContentBar *bar)
     pango_attr_list_unref (attrs);
 
     gtk_label_set_ellipsize (GTK_LABEL (bar->label), PANGO_ELLIPSIZE_END);
-    gtk_container_add (GTK_CONTAINER (content_area), bar->label);
+    gtk_info_bar_add_child (GTK_INFO_BAR (info_bar), bar->label);
 
-    g_signal_connect (bar, "response",
+    g_signal_connect (info_bar, "response",
                       G_CALLBACK (content_bar_response_cb),
                       bar);
 }
@@ -345,7 +342,6 @@ nautilus_x_content_bar_new (GMount             *mount,
                             const char * const *x_content_types)
 {
     return g_object_new (NAUTILUS_TYPE_X_CONTENT_BAR,
-                         "message-type", GTK_MESSAGE_QUESTION,
                          "mount", mount,
                          "x-content-types", x_content_types,
                          NULL);

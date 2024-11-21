@@ -16,14 +16,13 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#define G_LOG_DOMAIN "nautilus-tag-manager"
 
 #include "nautilus-tag-manager.h"
 #include "nautilus-file.h"
 #include "nautilus-file-undo-operations.h"
 #include "nautilus-file-undo-manager.h"
 #include "nautilus-tracker-utilities.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_TAG_MANAGER
-#include "nautilus-debug.h"
 
 #include <gio/gunixinputstream.h>
 #include <tracker-sparql.h>
@@ -44,10 +43,17 @@ struct _NautilusTagManager
     GHashTable *starred_file_uris;
     GFile *home;
 
+    GList *pending_changed_files;
+
     GCancellable *cancellable;
 };
 
 G_DEFINE_TYPE (NautilusTagManager, nautilus_tag_manager, G_TYPE_OBJECT);
+
+static NautilusTagManager *tag_manager = NULL;
+
+/* See nautilus_tag_manager_new_dummy() documentation for details. */
+static gboolean make_dummy_instance = FALSE;
 
 typedef struct
 {
@@ -64,18 +70,18 @@ enum
 };
 
 #define QUERY_STARRED_FILES \
-    "SELECT ?file " \
-    "{ " \
-    "    ?file a nautilus:File ; " \
-    "        nautilus:starred true . " \
-    "}"
+        "SELECT ?file " \
+        "{ " \
+        "    ?file a nautilus:File ; " \
+        "        nautilus:starred true . " \
+        "}"
 
 #define QUERY_FILE_IS_STARRED \
-    "ASK " \
-    "{ " \
-    "    ~file a nautilus:File ; " \
-    "        nautilus:starred true . " \
-    "}"
+        "ASK " \
+        "{ " \
+        "    ~file a nautilus:File ; " \
+        "        nautilus:starred true . " \
+        "}"
 
 static guint signals[LAST_SIGNAL];
 
@@ -141,8 +147,6 @@ on_update_callback (GObject      *object,
 
     if (error == NULL)
     {
-        /* FIXME: make sure data->tag_manager->starred_file_uris is up to date */
-
         if (!nautilus_file_undo_manager_is_operating ())
         {
             NautilusFileUndoInfo *undo_info;
@@ -152,8 +156,6 @@ on_update_callback (GObject      *object,
 
             g_object_unref (undo_info);
         }
-
-        g_signal_emit_by_name (data->tag_manager, "starred-changed", nautilus_file_list_copy (data->selection));
 
         g_task_return_boolean (data->task, TRUE);
         g_object_unref (data->task);
@@ -177,29 +179,30 @@ on_update_callback (GObject      *object,
  * nautilus_tag_manager_get_starred_files:
  * @self: The tag manager singleton
  *
- * Returns: (element-type gchar*) (transfer container): A list of the starred urls.
+ * Returns: (element-type gchar*) (transfer full): A list of the starred NautilusFile.
  */
 GList *
 nautilus_tag_manager_get_starred_files (NautilusTagManager *self)
 {
     GHashTableIter starred_iter;
     gchar *starred_uri;
-    GList *starred_file_uris = NULL;
+    GList *starred_files = NULL;
 
     g_hash_table_iter_init (&starred_iter, self->starred_file_uris);
     while (g_hash_table_iter_next (&starred_iter, (gpointer *) &starred_uri, NULL))
     {
-        g_autoptr (GFile) file = g_file_new_for_uri (starred_uri);
+        g_autoptr (GFile) location = g_file_new_for_uri (starred_uri);
+        NautilusFile *file = nautilus_file_get (location);
 
-        /* Skip files ouside $HOME, because we don't support starring these yet.
+        /* Skip files outside $HOME, because we don't support starring these yet.
          * See comment on nautilus_tag_manager_can_star_contents() */
-        if (g_file_has_prefix (file, self->home))
+        if (g_file_has_prefix (location, self->home))
         {
-            starred_file_uris = g_list_prepend (starred_file_uris, starred_uri);
+            starred_files = g_list_prepend (starred_files, file);
         }
     }
 
-    return starred_file_uris;
+    return starred_files;
 }
 
 static void
@@ -212,7 +215,6 @@ on_get_starred_files_cursor_callback (GObject      *object,
     const gchar *url;
     gboolean success;
     NautilusTagManager *self;
-    GList *changed_files;
     NautilusFile *file;
 
     cursor = TRACKER_SPARQL_CURSOR (object);
@@ -228,6 +230,12 @@ on_get_starred_files_cursor_callback (GObject      *object,
             g_warning ("Error on getting all tags cursor callback: %s", error->message);
         }
 
+        if (self->pending_changed_files != NULL)
+        {
+            g_signal_emit_by_name (self, "starred-changed", self->pending_changed_files);
+            g_clear_pointer (&self->pending_changed_files, nautilus_file_list_free);
+        }
+
         g_clear_object (&cursor);
         return;
     }
@@ -240,15 +248,11 @@ on_get_starred_files_cursor_callback (GObject      *object,
 
     if (file)
     {
-        changed_files = g_list_prepend (NULL, file);
-
-        g_signal_emit_by_name (self, "starred-changed", changed_files);
-
-        nautilus_file_list_free (changed_files);
+        self->pending_changed_files = g_list_prepend (self->pending_changed_files, file);
     }
     else
     {
-        DEBUG ("File %s is starred but not found", url);
+        g_debug ("File %s is starred but not found", url);
     }
 
     tracker_sparql_cursor_next_async (cursor,
@@ -299,8 +303,6 @@ nautilus_tag_manager_query_starred_files (NautilusTagManager *self,
         g_message ("nautilus-tag-manager: No Tracker connection");
         return;
     }
-
-    self->cancellable = cancellable;
 
     tracker_sparql_statement_execute_async (self->query_starred_files,
                                             cancellable,
@@ -383,7 +385,7 @@ nautilus_tag_manager_star_files (NautilusTagManager  *self,
     GTask *task;
     UpdateData *update_data;
 
-    DEBUG ("Starring %i files", g_list_length (selection));
+    g_debug ("Starring %i files", g_list_length (selection));
 
     task = g_task_new (object, cancellable, callback, NULL);
 
@@ -416,7 +418,7 @@ nautilus_tag_manager_unstar_files (NautilusTagManager  *self,
     GTask *task;
     UpdateData *update_data;
 
-    DEBUG ("Unstarring %i files", g_list_length (selection));
+    g_debug ("Unstarring %i files", g_list_length (selection));
 
     task = g_task_new (object, cancellable, callback, NULL);
 
@@ -447,7 +449,6 @@ on_tracker_notifier_events (TrackerNotifier *notifier,
 {
     TrackerNotifierEvent *event;
     NautilusTagManager *self;
-    int i;
     const gchar *file_url;
     GError *error = NULL;
     TrackerSparqlCursor *cursor;
@@ -458,14 +459,14 @@ on_tracker_notifier_events (TrackerNotifier *notifier,
 
     self = NAUTILUS_TAG_MANAGER (user_data);
 
-    for (i = 0; i < events->len; i++)
+    for (guint i = 0; i < events->len; i++)
     {
         event = g_ptr_array_index (events, i);
 
         file_url = tracker_notifier_event_get_urn (event);
         changed_file = NULL;
 
-        DEBUG ("Got event for file %s", file_url);
+        g_debug ("Got event for file %s", file_url);
 
         tracker_sparql_statement_bind_string (self->query_file_is_starred, "file", file_url);
         cursor = tracker_sparql_statement_execute (self->query_file_is_starred,
@@ -491,7 +492,7 @@ on_tracker_notifier_events (TrackerNotifier *notifier,
 
             if (inserted)
             {
-                DEBUG ("Added %s to starred files list", file_url);
+                g_debug ("Added %s to starred files list", file_url);
                 changed_file = nautilus_file_get_by_uri (file_url);
             }
         }
@@ -501,7 +502,7 @@ on_tracker_notifier_events (TrackerNotifier *notifier,
 
             if (removed)
             {
-                DEBUG ("Removed %s from starred files list", file_url);
+                g_debug ("Removed %s from starred files list", file_url);
                 changed_file = nautilus_file_get_by_uri (file_url);
             }
         }
@@ -533,10 +534,13 @@ nautilus_tag_manager_finalize (GObject *object)
                                               self);
     }
 
+    g_cancellable_cancel (self->cancellable);
+    g_clear_object (&self->cancellable);
     g_clear_object (&self->notifier);
     g_clear_object (&self->db);
     g_clear_object (&self->query_file_is_starred);
     g_clear_object (&self->query_starred_files);
+    g_clear_pointer (&self->pending_changed_files, nautilus_file_list_free);
 
     g_hash_table_destroy (self->starred_file_uris);
     g_clear_object (&self->home);
@@ -566,20 +570,13 @@ nautilus_tag_manager_class_init (NautilusTagManagerClass *klass)
 }
 
 /**
- * nautilus_tag_manager_get:
- *
- * Gets a reference to the tag manager.
- *
- * If used to initialize a struct field, make sure to release on finalization.
- * If used to initialize a local variable, make sure to use g_autoptr().
+ * nautilus_tag_manager_new:
  *
  * Returns: (transfer full): the #NautilusTagManager singleton object.
  */
 NautilusTagManager *
-nautilus_tag_manager_get (void)
+nautilus_tag_manager_new (void)
 {
-    static NautilusTagManager *tag_manager = NULL;
-
     if (tag_manager != NULL)
     {
         return g_object_ref (tag_manager);
@@ -588,6 +585,34 @@ nautilus_tag_manager_get (void)
     tag_manager = g_object_new (NAUTILUS_TYPE_TAG_MANAGER, NULL);
     g_object_add_weak_pointer (G_OBJECT (tag_manager), (gpointer) & tag_manager);
 
+    return tag_manager;
+}
+
+/**
+ * nautilus_tag_manager_new_dummy:
+ *
+ * Creates a dummy tag manager without database.
+ *
+ * Useful only for tests where the tag manager is needed but not being tested
+ * and we don't want to fail the tests due to irrelevant D-Bus failures.
+ *
+ * Returns: (transfer full): the #NautilusTagManager singleton object.
+ */
+NautilusTagManager *
+nautilus_tag_manager_new_dummy (void)
+{
+    make_dummy_instance = TRUE;
+    return nautilus_tag_manager_new ();
+}
+
+/**
+ * nautilus_tag_manager_get:
+ *
+ * Returns: (transfer none): the #NautilusTagManager singleton object.
+ */
+NautilusTagManager *
+nautilus_tag_manager_get (void)
+{
     return tag_manager;
 }
 
@@ -647,15 +672,26 @@ setup_database (NautilusTagManager  *self,
     return TRUE;
 }
 
-/* Initialize the tag mananger. */
-void
-nautilus_tag_manager_set_cancellable (NautilusTagManager *self,
-                                      GCancellable       *cancellable)
+static void
+nautilus_tag_manager_init (NautilusTagManager *self)
 {
     g_autoptr (GError) error = NULL;
 
-    self->database_ok = setup_database (self, cancellable, &error);
+    self->starred_file_uris = g_hash_table_new_full (g_str_hash,
+                                                     g_str_equal,
+                                                     (GDestroyNotify) g_free,
+                                                     /* values are keys */
+                                                     NULL);
+    self->home = g_file_new_for_path (g_get_home_dir ());
 
+    if (make_dummy_instance)
+    {
+        /* Skip database initiation for nautilus_tag_manager_new_dummy(). */
+        return;
+    }
+
+    self->cancellable = g_cancellable_new ();
+    self->database_ok = setup_database (self, self->cancellable, &error);
     if (error)
     {
         g_warning ("Unable to initialize tag manager: %s", error->message);
@@ -664,7 +700,7 @@ nautilus_tag_manager_set_cancellable (NautilusTagManager *self,
 
     self->notifier = tracker_sparql_connection_create_notifier (self->db);
 
-    nautilus_tag_manager_query_starred_files (self, cancellable);
+    nautilus_tag_manager_query_starred_files (self, self->cancellable);
 
     g_signal_connect (self->notifier,
                       "events",
@@ -672,26 +708,26 @@ nautilus_tag_manager_set_cancellable (NautilusTagManager *self,
                       self);
 }
 
-static void
-nautilus_tag_manager_init (NautilusTagManager *self)
-{
-    self->starred_file_uris = g_hash_table_new_full (g_str_hash,
-                                                     g_str_equal,
-                                                     (GDestroyNotify) g_free,
-                                                     /* values are keys */
-                                                     NULL);
-    self->home = g_file_new_for_path (g_get_home_dir ());
-}
-
 gboolean
-nautilus_tag_manager_can_star_contents (NautilusTagManager *tag_manager,
+nautilus_tag_manager_can_star_contents (NautilusTagManager *self,
                                         GFile              *directory)
 {
     /* We only allow files to be starred inside the home directory for now.
      * This avoids the starred files database growing too big.
      * See https://gitlab.gnome.org/GNOME/nautilus/-/merge_requests/553#note_903108
      */
-    return g_file_has_prefix (directory, tag_manager->home) || g_file_equal (directory, tag_manager->home);
+    return g_file_has_prefix (directory, self->home) || g_file_equal (directory, self->home);
+}
+
+gboolean
+nautilus_tag_manager_can_star_location (NautilusTagManager *self,
+                                        GFile              *directory)
+{
+    /* We only allow files to be starred inside the home directory for now.
+     * This avoids the starred files database growing too big.
+     * See https://gitlab.gnome.org/GNOME/nautilus/-/merge_requests/553#note_903108
+     */
+    return g_file_has_prefix (directory, self->home);
 }
 
 static void
@@ -700,7 +736,6 @@ update_moved_uris_callback (GObject      *object,
                             gpointer      user_data)
 {
     g_autoptr (GError) error = NULL;
-    g_autoptr (GPtrArray) new_uris = user_data;
 
     tracker_sparql_connection_update_finish (TRACKER_SPARQL_CONNECTION (object),
                                              result,
@@ -709,20 +744,6 @@ update_moved_uris_callback (GObject      *object,
     if (error != NULL && error->code != G_IO_ERROR_CANCELLED)
     {
         g_warning ("Error updating moved uris: %s", error->message);
-    }
-    else
-    {
-        g_autolist (NautilusFile) updated_files = NULL;
-        g_autoptr (NautilusTagManager) tag_manager = nautilus_tag_manager_get ();
-
-        for (guint i = 0; i < new_uris->len; i++)
-        {
-            gchar *new_uri = g_ptr_array_index (new_uris, i);
-
-            updated_files = g_list_prepend (updated_files, nautilus_file_get_by_uri (new_uri));
-        }
-
-        g_signal_emit_by_name (tag_manager, "starred-changed", updated_files);
     }
 }
 
@@ -790,7 +811,7 @@ nautilus_tag_manager_update_moved_uris (NautilusTagManager *self,
         return;
     }
 
-    DEBUG ("Updating moved URI for %i starred files", new_uris->len);
+    g_debug ("Updating moved URI for %i starred files", new_uris->len);
 
     query = g_string_new ("DELETE DATA {");
 
@@ -816,15 +837,11 @@ nautilus_tag_manager_update_moved_uris (NautilusTagManager *self,
 
     g_string_append (query, "}");
 
-    /* Forward the new_uris list to later pass in the ::files-changed signal.
-     * There is no need to pass the old_uris because the file model is updated
-     * independently; we need only inform the view where to display stars now.
-     */
     tracker_sparql_connection_update_async (self->db,
                                             query->str,
                                             self->cancellable,
                                             update_moved_uris_callback,
-                                            g_steal_pointer (&new_uris));
+                                            NULL);
 }
 
 static void
@@ -840,7 +857,7 @@ process_tracker2_data_cb (GObject      *source_object,
 
     if (!error)
     {
-        DEBUG ("Data migration was successful. Creating stamp %s", path);
+        g_debug ("Data migration was successful. Creating stamp %s", path);
 
         g_file_set_contents (path, "", -1, &error);
         if (error)
@@ -885,12 +902,12 @@ process_tracker2_data (NautilusTagManager *self,
 
         if (file)
         {
-            DEBUG ("Tracker 2 migration: starring %s", *group);
+            g_debug ("Tracker 2 migration: starring %s", *group);
             selection = g_list_prepend (selection, file);
         }
         else
         {
-            DEBUG ("Tracker 2 migration: couldn't get NautilusFile for %s", *group);
+            g_debug ("Tracker 2 migration: couldn't get NautilusFile for %s", *group);
         }
     }
 
@@ -930,15 +947,15 @@ child_watch_cb (GPid     pid,
                 gint     status,
                 gpointer user_data)
 {
-    DEBUG ("Child %" G_PID_FORMAT " exited %s", pid,
-           g_spawn_check_exit_status (status, NULL) ? "normally" : "abnormally");
+    g_debug ("Child %" G_PID_FORMAT " exited %s", pid,
+             g_spawn_check_wait_status (status, NULL) ? "normally" : "abnormally");
     g_spawn_close_pid (pid);
 }
 
 static void
 export_tracker2_data (NautilusTagManager *self)
 {
-    gchar *argv[] = {"tracker3", "export", "--2to3", "files-starred", "--keyfile", NULL};
+    gchar *argv[] = {"tinysparql3", "export", "--2to3", "files-starred", "--keyfile", NULL};
     gint stdout_fd;
     GPid child_pid;
     g_autoptr (GError) error = NULL;
@@ -962,7 +979,7 @@ export_tracker2_data (NautilusTagManager *self)
                                         &error);
     if (!success)
     {
-        g_warning ("Tracker 2 migration: Couldn't run `tracker3`: %s", error->message);
+        g_warning ("Tracker 2 migration: Couldn't run `tinysparql3`: %s", error->message);
         return;
     }
 
@@ -984,11 +1001,11 @@ nautilus_tag_manager_maybe_migrate_tracker2_data (NautilusTagManager *self)
 
     if (g_file_test (path, G_FILE_TEST_EXISTS))
     {
-        DEBUG ("Tracker 2 migration: already completed.");
+        g_debug ("Tracker 2 migration: already completed.");
     }
     else
     {
-        DEBUG ("Tracker 2 migration: starting.");
+        g_debug ("Tracker 2 migration: starting.");
         export_tracker2_data (self);
     }
 }

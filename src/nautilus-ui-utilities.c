@@ -24,13 +24,41 @@
 #include "nautilus-ui-utilities.h"
 #include "nautilus-icon-info.h"
 #include "nautilus-application.h"
-#include <eel/eel-graphic-effects.h>
 
 #include <gio/gio.h>
 #include <gtk/gtk.h>
-#include <libgd/gd.h>
 #include <string.h>
 #include <glib/gi18n.h>
+
+
+char *
+nautilus_capitalize_str (const char *string)
+{
+    char *capitalized = NULL;
+
+    if (string == NULL)
+    {
+        return NULL;
+    }
+
+    if (g_utf8_validate (string, -1, NULL))
+    {
+        g_autofree gunichar *ucs4 = NULL;
+        ucs4 = g_utf8_to_ucs4 (string, -1, NULL, NULL, NULL);
+        if (ucs4 != NULL)
+        {
+            ucs4[0] = g_unichar_toupper (ucs4[0]);
+            capitalized = g_ucs4_to_utf8 (ucs4, -1, NULL, NULL, NULL);
+        }
+    }
+
+    if (capitalized == NULL)
+    {
+        return g_strdup (string);
+    }
+
+    return capitalized;
+}
 
 /**
  * nautilus_gmenu_set_from_model:
@@ -68,28 +96,158 @@ nautilus_gmenu_set_from_model (GMenu      *target_menu,
     }
 }
 
-#define NAUTILUS_THUMBNAIL_FRAME_LEFT 3
-#define NAUTILUS_THUMBNAIL_FRAME_TOP 3
-#define NAUTILUS_THUMBNAIL_FRAME_RIGHT 3
-#define NAUTILUS_THUMBNAIL_FRAME_BOTTOM 3
+/**
+ * nautilus_g_menu_model_find_by_string:
+ * @model: the #GMenuModel with items to search
+ * @attribute: the menu item attribute to compare with
+ * @string: the string to match the value of @attribute
+ *
+ * This will search for an item in the model which has got the @attribute and
+ * whose value is equal to @string.
+ *
+ * It is assumed that @attribute has the a GVariant format string "s".
+ *
+ * Returns: The index of the first match in the model, or -1 if no item matches.
+ */
+gint
+nautilus_g_menu_model_find_by_string (GMenuModel  *model,
+                                      const gchar *attribute,
+                                      const gchar *string)
+{
+    gint item_index = -1;
+    gint n_items;
+
+    n_items = g_menu_model_get_n_items (model);
+    for (gint i = 0; i < n_items; i++)
+    {
+        g_autofree gchar *value = NULL;
+        if (g_menu_model_get_item_attribute (model, i, attribute, "s", &value) &&
+            g_strcmp0 (value, string) == 0)
+        {
+            item_index = i;
+            break;
+        }
+    }
+    return item_index;
+}
+
+typedef struct
+{
+    NautilusMode mode;
+    const char *name;
+} ModeAndName;
+
+static ModeAndName mode_map[] =
+{
+    { NAUTILUS_MODE_BROWSE, "browse" },
+    { NAUTILUS_MODE_OPEN_FILE, "open-file" },
+    { NAUTILUS_MODE_OPEN_FILES, "open-files" },
+    { NAUTILUS_MODE_OPEN_FOLDER, "open-folder" },
+    { NAUTILUS_MODE_OPEN_FOLDERS, "open-folders" },
+    { NAUTILUS_MODE_SAVE_FILE, "save-file" },
+    { NAUTILUS_MODE_SAVE_FILES, "save-files" },
+    { 0, NULL }
+};
+
+static const char *
+get_name_for_mode (NautilusMode mode)
+{
+    for (guint i = 0; mode_map[i].name != NULL; i++)
+    {
+        if (mode_map[i].mode == mode)
+        {
+            return mode_map[i].name;
+        }
+    }
+
+    g_return_val_if_reached (NULL);
+}
+
+static void
+filter_menu_model (GMenuModel *model,
+                   const char *filter_key,
+                   const char *filter_value)
+{
+    for (gint i = g_menu_model_get_n_items (model) - 1; i >= 0; i--)
+    {
+        g_autoptr (GMenuModel) section = NULL;
+        g_autofree char *value = NULL;
+
+        if (g_menu_model_get_item_attribute (model, i, filter_key, "s", &value))
+        {
+            g_auto (GStrv) tokens = g_strsplit (value, ",", 0);
+
+            if (!g_strv_contains ((const gchar * const *) tokens, filter_value))
+            {
+                g_menu_remove (G_MENU (model), i);
+                continue;
+            }
+        }
+
+        section = g_menu_model_get_item_link (model, i, G_MENU_LINK_SECTION);
+
+        if (section != NULL)
+        {
+            filter_menu_model (section, filter_key, filter_value);
+        }
+    }
+}
 
 void
-nautilus_ui_frame_image (GdkPixbuf **pixbuf)
+nautilus_g_menu_model_set_for_mode (GMenuModel   *model,
+                                    NautilusMode  mode)
 {
-    GtkBorder border;
-    GdkPixbuf *pixbuf_with_frame;
+    const char *mode_name = get_name_for_mode (mode);
+    filter_menu_model (model, "show-in-mode", mode_name);
+}
 
-    border.left = NAUTILUS_THUMBNAIL_FRAME_LEFT;
-    border.top = NAUTILUS_THUMBNAIL_FRAME_TOP;
-    border.right = NAUTILUS_THUMBNAIL_FRAME_RIGHT;
-    border.bottom = NAUTILUS_THUMBNAIL_FRAME_BOTTOM;
+void
+nautilus_g_menu_model_set_for_view (GMenuModel *model,
+                                    const char *view_name)
+{
+    filter_menu_model (model, "show-in-view", view_name);
+}
 
-    pixbuf_with_frame = gd_embed_image_in_frame (*pixbuf,
-                                                 "resource:///org/gnome/nautilus/icons/thumbnail_frame.png",
-                                                 &border, &border);
-    g_object_unref (*pixbuf);
+/**
+ * nautilus_g_menu_replace_string_in_item:
+ * @menu: the #GMenu to modify
+ * @i: the position of the item to change
+ * @attribute: the menu item attribute to change
+ * @string: the string to change the value of @attribute to
+ *
+ * This will replace the item at @position with a new item which is identical
+ * except that it has @attribute set to @string.
+ *
+ * This is useful e.g. when want to change the menu model of a #GtkPopover and
+ * you have a pointer to its menu model but not to the popover itself, so you
+ * can't just set a new model. With this method, the GtkPopover is notified of
+ * changes in its model and updates its contents accordingly.
+ *
+ * It is assumed that @attribute has the a GVariant format string "s".
+ */
+void
+nautilus_g_menu_replace_string_in_item (GMenu       *menu,
+                                        gint         i,
+                                        const gchar *attribute,
+                                        const gchar *string)
+{
+    g_autoptr (GMenuItem) item = NULL;
 
-    *pixbuf = pixbuf_with_frame;
+    g_return_if_fail (i != -1);
+    item = g_menu_item_new_from_model (G_MENU_MODEL (menu), i);
+    g_return_if_fail (item != NULL);
+
+    if (string != NULL)
+    {
+        g_menu_item_set_attribute (item, attribute, "s", string);
+    }
+    else
+    {
+        g_menu_item_set_attribute (item, attribute, NULL);
+    }
+
+    g_menu_remove (menu, i);
+    g_menu_insert_item (menu, i, item);
 }
 
 static GdkPixbuf *filmholes_left = NULL;
@@ -112,56 +270,55 @@ ensure_filmholes (void)
 }
 
 void
-nautilus_ui_frame_video (GdkPixbuf **pixbuf)
+nautilus_ui_frame_video (GtkSnapshot *snapshot,
+                         gdouble      width,
+                         gdouble      height)
 {
-    int width, height;
+    g_autoptr (GdkTexture) left_texture = NULL;
+    g_autoptr (GdkTexture) right_texture = NULL;
     int holes_width, holes_height;
-    int i;
 
     if (!ensure_filmholes ())
     {
         return;
     }
 
-    width = gdk_pixbuf_get_width (*pixbuf);
-    height = gdk_pixbuf_get_height (*pixbuf);
     holes_width = gdk_pixbuf_get_width (filmholes_left);
     holes_height = gdk_pixbuf_get_height (filmholes_left);
 
-    for (i = 0; i < height; i += holes_height)
-    {
-        gdk_pixbuf_composite (filmholes_left, *pixbuf, 0, i,
-                              MIN (width, holes_width),
-                              MIN (height - i, holes_height),
-                              0, i, 1, 1, GDK_INTERP_NEAREST, 255);
-    }
+    /* Left */
+    gtk_snapshot_push_repeat (snapshot,
+                              &GRAPHENE_RECT_INIT (0, 0, holes_width, height),
+                              NULL);
+    left_texture = gdk_texture_new_for_pixbuf (filmholes_left);
+    gtk_snapshot_append_texture (snapshot,
+                                 left_texture,
+                                 &GRAPHENE_RECT_INIT (0, 0, holes_width, holes_height));
+    gtk_snapshot_pop (snapshot);
 
-    for (i = 0; i < height; i += holes_height)
-    {
-        gdk_pixbuf_composite (filmholes_right, *pixbuf,
-                              width - holes_width, i,
-                              MIN (width, holes_width),
-                              MIN (height - i, holes_height),
-                              width - holes_width, i,
-                              1, 1, GDK_INTERP_NEAREST, 255);
-    }
+    /* Right */
+    gtk_snapshot_push_repeat (snapshot,
+                              &GRAPHENE_RECT_INIT (width - holes_width, 0, holes_width, height),
+                              NULL);
+    right_texture = gdk_texture_new_for_pixbuf (filmholes_right);
+    gtk_snapshot_append_texture (snapshot,
+                                 right_texture,
+                                 &GRAPHENE_RECT_INIT (width - holes_width, 0, holes_width, holes_height));
+    gtk_snapshot_pop (snapshot);
 }
 
 gboolean
-nautilus_file_date_in_between (guint64    unix_file_time,
-                               GDateTime *initial_date,
-                               GDateTime *end_date)
+nautilus_date_time_is_between_dates (GDateTime *date,
+                                     GDateTime *initial_date,
+                                     GDateTime *end_date)
 {
-    GDateTime *date;
     gboolean in_between;
 
     /* Silently ignore errors */
-    if (unix_file_time == 0)
+    if (date == NULL || g_date_time_to_unix (date) == 0)
     {
         return FALSE;
     }
-
-    date = g_date_time_new_from_unix_local (unix_file_time);
 
     /* For the end date, we want to make end_date inclusive,
      * for that the difference between the start of the day and the in_between
@@ -169,8 +326,6 @@ nautilus_file_date_in_between (guint64    unix_file_time,
      */
     in_between = g_date_time_difference (date, initial_date) > 0 &&
                  g_date_time_difference (end_date, date) / G_TIME_SPAN_DAY > -1;
-
-    g_date_time_unref (date);
 
     return in_between;
 }
@@ -268,7 +423,7 @@ get_text_for_date_range (GPtrArray *date_range,
     return label;
 }
 
-GtkDialog *
+AdwMessageDialog *
 show_dialog (const gchar    *primary_text,
              const gchar    *secondary_text,
              GtkWindow      *parent,
@@ -278,28 +433,19 @@ show_dialog (const gchar    *primary_text,
 
     g_return_val_if_fail (parent != NULL, NULL);
 
-    dialog = gtk_message_dialog_new (parent,
-                                     GTK_DIALOG_MODAL,
-                                     type,
-                                     GTK_BUTTONS_OK,
-                                     "%s", primary_text);
+    dialog = adw_message_dialog_new (parent, primary_text, secondary_text);
+    adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog), "ok", _("_OK"));
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "ok");
 
-    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                              "%s", secondary_text);
+    gtk_window_present (GTK_WINDOW (dialog));
 
-    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
-
-    gtk_widget_show (dialog);
-
-    g_signal_connect (GTK_DIALOG (dialog), "response",
-                      G_CALLBACK (gtk_widget_destroy), NULL);
-
-    return GTK_DIALOG (dialog);
+    return ADW_MESSAGE_DIALOG (dialog);
 }
 
 static void
 notify_unmount_done (GMountOperation *op,
-                     const gchar     *message)
+                     const gchar     *message,
+                     gpointer         user_data)
 {
     NautilusApplication *application;
     gchar *notification_id;
@@ -315,7 +461,7 @@ notify_unmount_done (GMountOperation *op,
         gchar **strings;
 
         strings = g_strsplit (message, "\n", 0);
-        icon = g_themed_icon_new ("media-removable-symbolic");
+        icon = g_mount_get_symbolic_icon (G_MOUNT (user_data));
         unplug = g_notification_new (strings[0]);
         g_notification_set_body (unplug, strings[1]);
         g_notification_set_icon (unplug, icon);
@@ -331,7 +477,8 @@ notify_unmount_done (GMountOperation *op,
 
 static void
 notify_unmount_show (GMountOperation *op,
-                     const gchar     *message)
+                     const gchar     *message,
+                     gpointer         user_data)
 {
     NautilusApplication *application;
     GNotification *unmount;
@@ -341,7 +488,7 @@ notify_unmount_show (GMountOperation *op,
 
     application = nautilus_application_get_default ();
     strings = g_strsplit (message, "\n", 0);
-    icon = g_themed_icon_new ("media-removable");
+    icon = g_mount_get_icon (G_MOUNT (user_data));
 
     unmount = g_notification_new (strings[0]);
     g_notification_set_body (unmount, strings[1]);
@@ -365,11 +512,11 @@ show_unmount_progress_cb (GMountOperation *op,
 {
     if (bytes_left == 0)
     {
-        notify_unmount_done (op, message);
+        notify_unmount_done (op, message, user_data);
     }
     else
     {
-        notify_unmount_show (op, message);
+        notify_unmount_show (op, message, user_data);
     }
 }
 
@@ -377,5 +524,5 @@ void
 show_unmount_progress_aborted_cb (GMountOperation *op,
                                   gpointer         user_data)
 {
-    notify_unmount_done (op, NULL);
+    notify_unmount_done (op, NULL, user_data);
 }

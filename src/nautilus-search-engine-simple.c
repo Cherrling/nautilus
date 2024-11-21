@@ -18,22 +18,21 @@
  * Author: Alexander Larsson <alexl@redhat.com>
  *
  */
+#define G_LOG_DOMAIN "nautilus-search"
 
 #include <config.h>
 #include "nautilus-search-engine-simple.h"
 
-#include "nautilus-search-engine-private.h"
 #include "nautilus-search-hit.h"
 #include "nautilus-search-provider.h"
 #include "nautilus-ui-utilities.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH
-#include "nautilus-debug.h"
 
 #include <string.h>
 #include <glib.h>
 #include <gio/gio.h>
 
 #define BATCH_SIZE 500
+#define CREATE_THREAD_DELAY_MS 500
 
 enum
 {
@@ -58,7 +57,6 @@ typedef struct
     GList *hits;
 
     NautilusQuery *query;
-
     gint processing_id;
     GMutex idle_mutex;
     /* The following data can be accessed from different threads
@@ -73,6 +71,7 @@ struct _NautilusSearchEngineSimple
 {
     GObject parent_instance;
     NautilusQuery *query;
+    guint create_thread_timeout_id;
 
     SearchThreadData *active_search;
 };
@@ -90,6 +89,7 @@ finalize (GObject *object)
 {
     NautilusSearchEngineSimple *simple = NAUTILUS_SEARCH_ENGINE_SIMPLE (object);
     g_clear_object (&simple->query);
+    g_clear_handle_id (&simple->create_thread_timeout_id, g_source_remove);
 
     G_OBJECT_CLASS (nautilus_search_engine_simple_parent_class)->finalize (object);
 }
@@ -99,7 +99,6 @@ search_thread_data_new (NautilusSearchEngineSimple *engine,
                         NautilusQuery              *query)
 {
     SearchThreadData *data;
-    GFile *location;
 
     data = g_new0 (SearchThreadData, 1);
 
@@ -107,10 +106,6 @@ search_thread_data_new (NautilusSearchEngineSimple *engine,
     data->directories = g_queue_new ();
     data->visited = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
     data->query = g_object_ref (query);
-
-    location = nautilus_query_get_location (query);
-
-    g_queue_push_tail (data->directories, location);
     data->mime_types = nautilus_query_get_mime_types (query);
 
     data->cancellable = g_cancellable_new ();
@@ -153,11 +148,11 @@ search_thread_done (SearchThreadData *data)
 
     if (g_cancellable_is_cancelled (data->cancellable))
     {
-        DEBUG ("Simple engine finished and cancelled");
+        g_debug ("Simple engine finished and cancelled");
     }
     else
     {
-        DEBUG ("Simple engine finished");
+        g_debug ("Simple engine finished");
     }
     engine->active_search = NULL;
     nautilus_search_provider_finished (NAUTILUS_SEARCH_PROVIDER (engine),
@@ -176,7 +171,7 @@ search_thread_process_hits_idle (SearchThreadData *data,
 {
     if (!g_cancellable_is_cancelled (data->cancellable))
     {
-        DEBUG ("Simple engine add hits");
+        g_debug ("Simple engine add hits");
         nautilus_search_provider_hits_added (NAUTILUS_SEARCH_PROVIDER (data->engine),
                                              hits);
     }
@@ -270,14 +265,15 @@ send_batch_in_idle (SearchThreadData *thread_data)
 }
 
 #define STD_ATTRIBUTES \
-    G_FILE_ATTRIBUTE_STANDARD_NAME "," \
-    G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME "," \
-    G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP "," \
-    G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN "," \
-    G_FILE_ATTRIBUTE_STANDARD_TYPE "," \
-    G_FILE_ATTRIBUTE_TIME_MODIFIED "," \
-    G_FILE_ATTRIBUTE_TIME_ACCESS "," \
-    G_FILE_ATTRIBUTE_ID_FILE
+        G_FILE_ATTRIBUTE_STANDARD_NAME "," \
+        G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME "," \
+        G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP "," \
+        G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN "," \
+        G_FILE_ATTRIBUTE_STANDARD_TYPE "," \
+        G_FILE_ATTRIBUTE_TIME_MODIFIED "," \
+        G_FILE_ATTRIBUTE_TIME_ACCESS "," \
+        G_FILE_ATTRIBUTE_TIME_CREATED "," \
+        G_FILE_ATTRIBUTE_ID_FILE
 
 static void
 visit_directory (GFile            *dir,
@@ -285,7 +281,7 @@ visit_directory (GFile            *dir,
 {
     g_autoptr (GPtrArray) date_range = NULL;
     NautilusQuerySearchType type;
-    NautilusQueryRecursive recursive;
+    NautilusQueryRecursive recursive_flag;
     GFileEnumerator *enumerator;
     GFileInfo *info;
     GFile *child;
@@ -294,8 +290,6 @@ visit_directory (GFile            *dir,
     gboolean is_hidden, found;
     const char *id;
     gboolean visited;
-    guint64 atime;
-    guint64 mtime;
     GDateTime *initial_date;
     GDateTime *end_date;
     gchar *uri;
@@ -303,7 +297,8 @@ visit_directory (GFile            *dir,
     enumerator = g_file_enumerate_children (dir,
                                             data->mime_types->len > 0 ?
                                             STD_ATTRIBUTES ","
-                                            G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE
+                                            G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+                                            G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE
                                             :
                                             STD_ATTRIBUTES
                                             ,
@@ -316,18 +311,26 @@ visit_directory (GFile            *dir,
     }
 
     type = nautilus_query_get_search_type (data->query);
-    recursive = nautilus_query_get_recursive (data->query);
+    recursive_flag = nautilus_query_get_recursive (data->query);
     date_range = nautilus_query_get_date_range (data->query);
 
     while ((info = g_file_enumerator_next_file (enumerator, data->cancellable, NULL)) != NULL)
     {
+        g_autoptr (GDateTime) mtime = NULL;
+        g_autoptr (GDateTime) atime = NULL;
+        g_autoptr (GDateTime) ctime = NULL;
+        gboolean recursive = FALSE;
+
         display_name = g_file_info_get_display_name (info);
         if (display_name == NULL)
         {
             goto next;
         }
 
-        is_hidden = g_file_info_get_is_hidden (info) || g_file_info_get_is_backup (info);
+        is_hidden = g_file_info_get_attribute_boolean (info,
+                                                       G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN) ||
+                    g_file_info_get_attribute_boolean (info,
+                                                       G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP);
         if (is_hidden && !nautilus_query_get_show_hidden_files (data->query))
         {
             goto next;
@@ -339,10 +342,17 @@ visit_directory (GFile            *dir,
 
         if (found && data->mime_types->len > 0)
         {
-            mime_type = g_file_info_get_content_type (info);
+            mime_type = g_file_info_get_attribute_string (info,
+                                                          G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
+            if (mime_type == NULL)
+            {
+                mime_type = g_file_info_get_attribute_string (info,
+                                                              G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE);
+            }
+
             found = FALSE;
 
-            for (gint i = 0; i < data->mime_types->len; i++)
+            for (guint i = 0; mime_type != NULL && i < data->mime_types->len; i++)
             {
                 if (g_content_type_is_a (mime_type, g_ptr_array_index (data->mime_types, i)))
                 {
@@ -352,41 +362,59 @@ visit_directory (GFile            *dir,
             }
         }
 
-        mtime = g_file_info_get_attribute_uint64 (info, "time::modified");
-        atime = g_file_info_get_attribute_uint64 (info, "time::access");
+        mtime = g_file_info_get_modification_date_time (info);
+        atime = g_file_info_get_access_date_time (info);
+        ctime = g_file_info_get_creation_date_time (info);
 
         if (found && date_range != NULL)
         {
-            guint64 current_file_time;
+            GDateTime *target_date;
 
             initial_date = g_ptr_array_index (date_range, 0);
             end_date = g_ptr_array_index (date_range, 1);
 
-            if (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS)
+            switch (type)
             {
-                current_file_time = atime;
+                case NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS:
+                {
+                    target_date = atime;
+                }
+                break;
+
+                case NAUTILUS_QUERY_SEARCH_TYPE_LAST_MODIFIED:
+                {
+                    target_date = mtime;
+                }
+                break;
+
+                case NAUTILUS_QUERY_SEARCH_TYPE_CREATED:
+                {
+                    target_date = ctime;
+                }
+                break;
+
+                default:
+                {
+                    target_date = NULL;
+                }
             }
-            else
-            {
-                current_file_time = mtime;
-            }
-            found = nautilus_file_date_in_between (current_file_time,
-                                                   initial_date,
-                                                   end_date);
+
+            found = nautilus_date_time_is_between_dates (target_date,
+                                                         initial_date,
+                                                         end_date);
         }
 
         if (found)
         {
             NautilusSearchHit *hit;
-            GDateTime *date;
 
             uri = g_file_get_uri (child);
             hit = nautilus_search_hit_new (uri);
             g_free (uri);
             nautilus_search_hit_set_fts_rank (hit, match);
-            date = g_date_time_new_from_unix_local (mtime);
-            nautilus_search_hit_set_modification_time (hit, date);
-            g_date_time_unref (date);
+            nautilus_search_hit_set_modification_time (hit, mtime);
+            nautilus_search_hit_set_access_time (hit, atime);
+            nautilus_search_hit_set_creation_time (hit, ctime);
 
             data->hits = g_list_prepend (data->hits, hit);
         }
@@ -397,10 +425,29 @@ visit_directory (GFile            *dir,
             send_batch_in_idle (data);
         }
 
-        if (recursive != NAUTILUS_QUERY_RECURSIVE_NEVER &&
-            g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY &&
-            is_recursive_search (NAUTILUS_SEARCH_ENGINE_TYPE_NON_INDEXED,
-                                 recursive, child))
+        if (recursive_flag != NAUTILUS_QUERY_RECURSIVE_NEVER &&
+            g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+        {
+            if (recursive_flag == NAUTILUS_QUERY_RECURSIVE_ALWAYS)
+            {
+                recursive = TRUE;
+            }
+            else if (recursive_flag == NAUTILUS_QUERY_RECURSIVE_LOCAL_ONLY)
+            {
+                g_autoptr (GFileInfo) file_system_info = NULL;
+
+                file_system_info = g_file_query_filesystem_info (child,
+                                                                 G_FILE_ATTRIBUTE_FILESYSTEM_REMOTE,
+                                                                 NULL, NULL);
+                if (file_system_info != NULL)
+                {
+                    recursive = !g_file_info_get_attribute_boolean (file_system_info,
+                                                                    G_FILE_ATTRIBUTE_FILESYSTEM_REMOTE);
+                }
+            }
+        }
+
+        if (recursive)
         {
             id = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILE);
             visited = FALSE;
@@ -473,11 +520,21 @@ search_thread_func (gpointer user_data)
 }
 
 static void
+create_thread_timeout (gpointer user_data)
+{
+    NautilusSearchEngineSimple *simple = user_data;
+    g_autoptr (GThread) thread = NULL;
+
+    simple->create_thread_timeout_id = 0;
+    thread = g_thread_new ("nautilus-search-simple", search_thread_func, simple->active_search);
+}
+
+static void
 nautilus_search_engine_simple_start (NautilusSearchProvider *provider)
 {
     NautilusSearchEngineSimple *simple;
     SearchThreadData *data;
-    GThread *thread;
+    g_autoptr (GFile) location = NULL;
 
     simple = NAUTILUS_SEARCH_ENGINE_SIMPLE (provider);
 
@@ -486,16 +543,26 @@ nautilus_search_engine_simple_start (NautilusSearchProvider *provider)
         return;
     }
 
-    DEBUG ("Simple engine start");
+    g_debug ("Simple engine start");
 
     data = search_thread_data_new (simple, simple->query);
 
-    thread = g_thread_new ("nautilus-search-simple", search_thread_func, data);
     simple->active_search = data;
-
     g_object_notify (G_OBJECT (provider), "running");
 
-    g_thread_unref (thread);
+    location = nautilus_query_get_location (simple->query);
+    if (location == NULL)
+    {
+        /* Global search. Nothing for this engine to do.*/
+        finish_search_thread (data);
+        return;
+    }
+
+    g_queue_push_tail (data->directories, g_steal_pointer (&location));
+
+    simple->create_thread_timeout_id = g_timeout_add_once (CREATE_THREAD_DELAY_MS,
+                                                           create_thread_timeout,
+                                                           simple);
 }
 
 static void
@@ -505,8 +572,16 @@ nautilus_search_engine_simple_stop (NautilusSearchProvider *provider)
 
     if (simple->active_search != NULL)
     {
-        DEBUG ("Simple engine stop");
+        g_debug ("Simple engine stop");
         g_cancellable_cancel (simple->active_search->cancellable);
+
+        if (simple->create_thread_timeout_id != 0)
+        {
+            /* Thread wasn't started, so we must call this directly from here.*/
+            finish_search_thread (simple->active_search);
+
+            g_clear_handle_id (&simple->create_thread_timeout_id, g_source_remove);
+        }
     }
 }
 

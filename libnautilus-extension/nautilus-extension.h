@@ -15,7 +15,9 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with libnautilus-extension.  If not, see <https://www.gnu.org/licenses/>.
  */
-#ifndef NAUTILUS_EXTENSION_H
+
+#pragma once
+
 #define NAUTILUS_EXTENSION_H
 
 #include <libnautilus-extension/nautilus-column-provider.h>
@@ -23,19 +25,21 @@
 #include <libnautilus-extension/nautilus-extension-enum-types.h>
 #include <libnautilus-extension/nautilus-file-info.h>
 #include <libnautilus-extension/nautilus-info-provider.h>
-#include <libnautilus-extension/nautilus-location-widget-provider.h>
 #include <libnautilus-extension/nautilus-menu.h>
 #include <libnautilus-extension/nautilus-menu-provider.h>
-#include <libnautilus-extension/nautilus-property-page.h>
-#include <libnautilus-extension/nautilus-property-page-provider.h>
+#include <libnautilus-extension/nautilus-properties-model.h>
+#include <libnautilus-extension/nautilus-properties-model-provider.h>
+#include <libnautilus-extension/nautilus-properties-item.h>
 
 /**
  * SECTION:nautilus-extension
  * @title: Extension entry points
  */
 
+G_BEGIN_DECLS
+
 /**
- * nautilus_module_initialize:
+ * nautilus_module_initialize: (skip)
  * @module: a #GTypeModule used in type registration
  *
  * Called when the extension is begin loaded to register the types it exports
@@ -43,14 +47,14 @@
  */
 void nautilus_module_initialize (GTypeModule  *module);
 /**
- * nautilus_module_shutdown:
+ * nautilus_module_shutdown: (skip)
  *
  * Called when the extension is being unloaded.
  */
 void nautilus_module_shutdown   (void);
 /**
- * nautilus_module_list_types:
- * @types: (out) (array length=num_types): array of GType *
+ * nautilus_module_list_types: (skip)
+ * @types: (out) (transfer none) (array length=num_types): array of GType *
  * @num_types: the number of types in the array
  *
  * Called after the extension has been initialized and has registered all the
@@ -59,4 +63,4 @@ void nautilus_module_shutdown   (void);
 void nautilus_module_list_types (const GType **types,
                                  int          *num_types);
 
-#endif
+G_END_DECLS

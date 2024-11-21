@@ -20,6 +20,7 @@
  *          Cosimo Cecchi <cosimoc@redhat.com>
  *
  */
+#define G_LOG_DOMAIN "nautilus-undo"
 
 #include <config.h>
 
@@ -30,9 +31,6 @@
 #include "nautilus-trash-monitor.h"
 
 #include <glib/gi18n.h>
-
-#define DEBUG_FLAG NAUTILUS_DEBUG_UNDO
-#include "nautilus-debug.h"
 
 enum
 {
@@ -230,7 +228,7 @@ nautilus_file_undo_manager_undo (GtkWindow                      *parent_window,
 void
 nautilus_file_undo_manager_set_action (NautilusFileUndoInfo *info)
 {
-    DEBUG ("Setting undo information %p", info);
+    g_debug ("Setting undo information %p", info);
 
     file_undo_manager_clear (undo_singleton);
 
@@ -258,13 +256,13 @@ nautilus_file_undo_manager_get_state (void)
 
 
 gboolean
-nautilus_file_undo_manager_is_operating ()
+nautilus_file_undo_manager_is_operating (void)
 {
     return undo_singleton->is_operating;
 }
 
 NautilusFileUndoManager *
-nautilus_file_undo_manager_get ()
+nautilus_file_undo_manager_get (void)
 {
     return undo_singleton;
 }

@@ -22,7 +22,6 @@
 
 #include "nautilus-search-directory-file.h"
 
-#include <eel/eel-glib-extensions.h>
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
 #include <string.h>
@@ -74,8 +73,11 @@ search_directory_file_call_when_ready (NautilusFile           *file,
     /* Update display name, in case this didn't happen yet */
     nautilus_search_directory_file_update_display_name (NAUTILUS_SEARCH_DIRECTORY_FILE (file));
 
-    /* All data for directory-as-file is always uptodate */
-    (*callback)(file, callback_data);
+    if (callback != NULL)
+    {
+        /* All data for directory-as-file is always up to date */
+        (*callback)(file, callback_data);
+    }
 }
 
 static void
@@ -169,12 +171,6 @@ search_directory_file_get_deep_counts (NautilusFile *file,
     return NAUTILUS_REQUEST_DONE;
 }
 
-static char *
-search_directory_file_get_where_string (NautilusFile *file)
-{
-    return g_strdup (_("Search"));
-}
-
 static void
 search_directory_file_set_metadata (NautilusFile *file,
                                     const char   *key,
@@ -206,8 +202,6 @@ nautilus_search_directory_file_update_display_name (NautilusSearchDirectoryFile 
 {
     NautilusFile *file;
     NautilusDirectory *directory;
-    NautilusSearchDirectory *search_dir;
-    NautilusQuery *query;
     char *display_name;
     gboolean changed;
 
@@ -217,13 +211,12 @@ nautilus_search_directory_file_update_display_name (NautilusSearchDirectoryFile 
     directory = nautilus_file_get_directory (file);
     if (directory != NULL)
     {
-        search_dir = NAUTILUS_SEARCH_DIRECTORY (directory);
-        query = nautilus_search_directory_get_query (search_dir);
+        NautilusSearchDirectory *search_dir = NAUTILUS_SEARCH_DIRECTORY (directory);
+        NautilusQuery *query = nautilus_search_directory_get_query (search_dir);
 
         if (query != NULL)
         {
             display_name = nautilus_query_to_readable_string (query);
-            g_object_unref (query);
         }
     }
 
@@ -304,7 +297,6 @@ nautilus_search_directory_file_class_init (NautilusSearchDirectoryFileClass *kla
     file_class->check_if_ready = search_directory_file_check_if_ready;
     file_class->get_item_count = search_directory_file_get_item_count;
     file_class->get_deep_counts = search_directory_file_get_deep_counts;
-    file_class->get_where_string = search_directory_file_get_where_string;
     file_class->set_metadata = search_directory_file_set_metadata;
     file_class->set_metadata_as_list = search_directory_file_set_metadata_as_list;
 }

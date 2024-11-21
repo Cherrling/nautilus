@@ -18,16 +18,14 @@
  * Author: Anders Carlsson <andersca@imendio.com>
  *
  */
+#define G_LOG_DOMAIN "nautilus-search"
 
 #include <config.h>
 #include "nautilus-search-engine.h"
-#include "nautilus-search-engine-private.h"
 
 #include "nautilus-file-utilities.h"
 #include "nautilus-search-engine-model.h"
 #include <glib/gi18n.h>
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH
-#include "nautilus-debug.h"
 #include "nautilus-search-engine-recent.h"
 #include "nautilus-search-engine-simple.h"
 #include "nautilus-search-engine-tracker.h"
@@ -46,6 +44,7 @@ typedef struct
 
     gboolean running;
     gboolean restart;
+    gboolean recent_enabled;
 } NautilusSearchEnginePrivate;
 
 enum
@@ -95,7 +94,7 @@ search_engine_start_real_setup (NautilusSearchEngine *engine)
 
     priv->restart = FALSE;
 
-    DEBUG ("Search engine start real setup");
+    g_debug ("Search engine start real setup");
 
     g_object_ref (engine);
 }
@@ -117,6 +116,10 @@ search_engine_start_real_recent (NautilusSearchEngine *engine)
     NautilusSearchEnginePrivate *priv;
 
     priv = nautilus_search_engine_get_instance_private (engine);
+    if (!priv->recent_enabled)
+    {
+        return;
+    }
 
     priv->providers_running++;
     nautilus_search_provider_start (NAUTILUS_SEARCH_PROVIDER (priv->recent));
@@ -195,12 +198,12 @@ nautilus_search_engine_start_by_target (NautilusSearchProvider     *provider,
 {
     NautilusSearchEngine *engine;
     NautilusSearchEnginePrivate *priv;
-    gint num_finished;
+    guint num_finished;
 
     engine = NAUTILUS_SEARCH_ENGINE (provider);
     priv = nautilus_search_engine_get_instance_private (engine);
 
-    DEBUG ("Search engine start");
+    g_debug ("Search engine start");
 
     num_finished = priv->providers_error + priv->providers_finished;
 
@@ -236,12 +239,12 @@ nautilus_search_engine_start (NautilusSearchProvider *provider)
 {
     NautilusSearchEngine *engine;
     NautilusSearchEnginePrivate *priv;
-    gint num_finished;
+    guint num_finished;
 
     engine = NAUTILUS_SEARCH_ENGINE (provider);
     priv = nautilus_search_engine_get_instance_private (engine);
 
-    DEBUG ("Search engine start");
+    g_debug ("Search engine start");
 
     num_finished = priv->providers_error + priv->providers_finished;
 
@@ -279,7 +282,7 @@ nautilus_search_engine_stop (NautilusSearchProvider *provider)
     engine = NAUTILUS_SEARCH_ENGINE (provider);
     priv = nautilus_search_engine_get_instance_private (engine);
 
-    DEBUG ("Search engine stop");
+    g_debug ("Search engine stop");
 
     nautilus_search_provider_stop (NAUTILUS_SEARCH_PROVIDER (priv->tracker));
     nautilus_search_provider_stop (NAUTILUS_SEARCH_PROVIDER (priv->recent));
@@ -305,8 +308,8 @@ search_provider_hits_added (NautilusSearchProvider *provider,
 
     if (!priv->running || priv->restart)
     {
-        DEBUG ("Ignoring hits-added, since engine is %s",
-               !priv->running ? "not running" : "waiting to restart");
+        g_debug ("Ignoring hits-added, since engine is %s",
+                 !priv->running ? "not running" : "waiting to restart");
         return;
     }
 
@@ -336,7 +339,7 @@ static void
 check_providers_status (NautilusSearchEngine *engine)
 {
     NautilusSearchEnginePrivate *priv;
-    gint num_finished;
+    guint num_finished;
 
     priv = nautilus_search_engine_get_instance_private (engine);
     num_finished = priv->providers_error + priv->providers_finished;
@@ -348,7 +351,7 @@ check_providers_status (NautilusSearchEngine *engine)
 
     if (num_finished == priv->providers_error)
     {
-        DEBUG ("Search engine error");
+        g_debug ("Search engine error");
         nautilus_search_provider_error (NAUTILUS_SEARCH_PROVIDER (engine),
                                         _("Unable to complete the requested search"));
     }
@@ -356,11 +359,11 @@ check_providers_status (NautilusSearchEngine *engine)
     {
         if (priv->restart)
         {
-            DEBUG ("Search engine finished and restarting");
+            g_debug ("Search engine finished and restarting");
         }
         else
         {
-            DEBUG ("Search engine finished");
+            g_debug ("Search engine finished");
         }
         nautilus_search_provider_finished (NAUTILUS_SEARCH_PROVIDER (engine),
                                            priv->restart ? NAUTILUS_SEARCH_PROVIDER_STATUS_RESTARTING :
@@ -387,7 +390,7 @@ search_provider_error (NautilusSearchProvider *provider,
 {
     NautilusSearchEnginePrivate *priv;
 
-    DEBUG ("Search provider error: %s", error_message);
+    g_debug ("Search provider error: %s", error_message);
 
     priv = nautilus_search_engine_get_instance_private (engine);
     priv->providers_error++;
@@ -402,7 +405,7 @@ search_provider_finished (NautilusSearchProvider       *provider,
 {
     NautilusSearchEnginePrivate *priv;
 
-    DEBUG ("Search provider finished");
+    g_debug ("Search provider finished");
 
     priv = nautilus_search_engine_get_instance_private (engine);
     priv->providers_finished++;
@@ -525,6 +528,10 @@ nautilus_search_engine_init (NautilusSearchEngine *engine)
 
     priv->recent = nautilus_search_engine_recent_new ();
     connect_provider_signals (engine, NAUTILUS_SEARCH_PROVIDER (priv->recent));
+
+    /* The recent engine is really only meant for the shell search provider,
+     * where it might get search hits that are not indexed by tracker. */
+    priv->recent_enabled = FALSE;
 }
 
 NautilusSearchEngine *
@@ -547,42 +554,10 @@ nautilus_search_engine_get_model_provider (NautilusSearchEngine *engine)
     return priv->model;
 }
 
-gboolean
-is_recursive_search (NautilusSearchEngineType  engine_type,
-                     NautilusQueryRecursive    recursive,
-                     GFile                    *location)
+void
+nautilus_search_engine_enable_recent (NautilusSearchEngine *engine)
 {
-    switch (recursive)
-    {
-        case NAUTILUS_QUERY_RECURSIVE_NEVER:
-        {
-            return FALSE;
-        }
+    NautilusSearchEnginePrivate *priv = nautilus_search_engine_get_instance_private (engine);
 
-        case NAUTILUS_QUERY_RECURSIVE_ALWAYS:
-        {
-            return TRUE;
-        }
-
-        case NAUTILUS_QUERY_RECURSIVE_INDEXED_ONLY:
-        {
-            return engine_type == NAUTILUS_SEARCH_ENGINE_TYPE_INDEXED;
-        }
-
-        case NAUTILUS_QUERY_RECURSIVE_LOCAL_ONLY:
-        {
-            g_autoptr (GFileInfo) file_system_info = NULL;
-
-            file_system_info = g_file_query_filesystem_info (location,
-                                                             G_FILE_ATTRIBUTE_FILESYSTEM_REMOTE,
-                                                             NULL, NULL);
-            if (file_system_info != NULL)
-            {
-                return !g_file_info_get_attribute_boolean (file_system_info,
-                                                           G_FILE_ATTRIBUTE_FILESYSTEM_REMOTE);
-            }
-        }
-    }
-
-    return TRUE;
+    priv->recent_enabled = TRUE;
 }

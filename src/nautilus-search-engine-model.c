@@ -18,6 +18,7 @@
  * Author: Alexander Larsson <alexl@redhat.com>
  *
  */
+#define G_LOG_DOMAIN "nautilus-search"
 
 #include <config.h>
 #include "nautilus-search-hit.h"
@@ -27,8 +28,6 @@
 #include "nautilus-directory-private.h"
 #include "nautilus-file.h"
 #include "nautilus-ui-utilities.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH
-#include "nautilus-debug.h"
 
 #include <string.h>
 #include <glib.h>
@@ -94,7 +93,7 @@ search_finished (NautilusSearchEngineModel *model)
 
     if (model->hits != NULL)
     {
-        DEBUG ("Model engine hits added");
+        g_debug ("Model engine hits added");
         nautilus_search_provider_hits_added (NAUTILUS_SEARCH_PROVIDER (model),
                                              model->hits);
         g_list_free_full (model->hits, g_object_unref);
@@ -105,7 +104,7 @@ search_finished (NautilusSearchEngineModel *model)
 
     g_object_notify (G_OBJECT (model), "running");
 
-    DEBUG ("Model engine finished");
+    g_debug ("Model engine finished");
     nautilus_search_provider_finished (NAUTILUS_SEARCH_PROVIDER (model),
                                        NAUTILUS_SEARCH_PROVIDER_STATUS_NORMAL);
     g_object_unref (model);
@@ -131,7 +130,7 @@ model_directory_ready_cb (NautilusDirectory *directory,
 {
     NautilusSearchEngineModel *model = user_data;
     g_autoptr (GPtrArray) mime_types = NULL;
-    gchar *uri, *display_name;
+    gchar *uri;
     GList *files, *hits, *l;
     NautilusFile *file;
     gdouble match;
@@ -147,17 +146,26 @@ model_directory_ready_cb (NautilusDirectory *directory,
 
     for (l = files; l != NULL; l = l->next)
     {
+        g_autofree gchar *display_name = NULL;
+        g_autoptr (GDateTime) mtime = NULL;
+        g_autoptr (GDateTime) atime = NULL;
+        g_autoptr (GDateTime) ctime = NULL;
+
         file = l->data;
 
-        display_name = nautilus_file_get_display_name (file);
-        match = nautilus_query_matches_string (model->query, display_name);
+        match = nautilus_query_matches_string (model->query,
+                                               nautilus_file_get_display_name (file));
         found = (match > -1);
+        if (!found)
+        {
+            continue;
+        }
 
-        if (found && mime_types->len > 0)
+        if (mime_types->len > 0)
         {
             found = FALSE;
 
-            for (gint i = 0; i < mime_types->len; i++)
+            for (guint i = 0; i < mime_types->len; i++)
             {
                 if (nautilus_file_is_mime_type (file, g_ptr_array_index (mime_types, i)))
                 {
@@ -166,29 +174,54 @@ model_directory_ready_cb (NautilusDirectory *directory,
                 }
             }
         }
+        if (!found)
+        {
+            continue;
+        }
+
+        mtime = g_date_time_new_from_unix_local (nautilus_file_get_mtime (file));
+        atime = g_date_time_new_from_unix_local (nautilus_file_get_atime (file));
+        ctime = g_date_time_new_from_unix_local (nautilus_file_get_btime (file));
 
         date_range = nautilus_query_get_date_range (model->query);
         if (found && date_range != NULL)
         {
             NautilusQuerySearchType type;
-            guint64 current_file_unix_time;
+            GDateTime *target_date;
 
             type = nautilus_query_get_search_type (model->query);
             initial_date = g_ptr_array_index (date_range, 0);
             end_date = g_ptr_array_index (date_range, 1);
 
-            if (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS)
+            switch (type)
             {
-                current_file_unix_time = nautilus_file_get_atime (file);
-            }
-            else
-            {
-                current_file_unix_time = nautilus_file_get_mtime (file);
+                case NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS:
+                {
+                    target_date = atime;
+                }
+                break;
+
+                case NAUTILUS_QUERY_SEARCH_TYPE_LAST_MODIFIED:
+                {
+                    target_date = mtime;
+                }
+                break;
+
+                case NAUTILUS_QUERY_SEARCH_TYPE_CREATED:
+                {
+                    target_date = ctime;
+                }
+                break;
+
+                default:
+                {
+                    target_date = NULL;
+                }
             }
 
-            found = nautilus_file_date_in_between (current_file_unix_time,
-                                                   initial_date,
-                                                   end_date);
+            found = nautilus_date_time_is_between_dates (target_date,
+                                                         initial_date,
+                                                         end_date);
             g_ptr_array_unref (date_range);
         }
 
@@ -197,12 +230,14 @@ model_directory_ready_cb (NautilusDirectory *directory,
             uri = nautilus_file_get_uri (file);
             hit = nautilus_search_hit_new (uri);
             nautilus_search_hit_set_fts_rank (hit, match);
+            nautilus_search_hit_set_modification_time (hit, mtime);
+            nautilus_search_hit_set_access_time (hit, atime);
+            nautilus_search_hit_set_creation_time (hit, ctime);
+
             hits = g_list_prepend (hits, hit);
 
             g_free (uri);
         }
-
-        g_free (display_name);
     }
 
     nautilus_file_list_free (files);
@@ -223,7 +258,7 @@ nautilus_search_engine_model_start (NautilusSearchProvider *provider)
         return;
     }
 
-    DEBUG ("Model engine start");
+    g_debug ("Model engine start");
 
     g_object_ref (model);
     model->query_pending = TRUE;
@@ -250,7 +285,7 @@ nautilus_search_engine_model_stop (NautilusSearchProvider *provider)
 
     if (model->query_pending)
     {
-        DEBUG ("Model engine stop");
+        g_debug ("Model engine stop");
 
         nautilus_directory_cancel_callback (model->directory,
                                             model_directory_ready_cb, model);
@@ -351,8 +386,7 @@ void
 nautilus_search_engine_model_set_model (NautilusSearchEngineModel *model,
                                         NautilusDirectory         *directory)
 {
-    g_clear_object (&model->directory);
-    model->directory = nautilus_directory_ref (directory);
+    g_set_object (&model->directory, directory);
 }
 
 NautilusDirectory *

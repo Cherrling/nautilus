@@ -23,13 +23,7 @@
 
 #include "nautilus-query.h"
 #include "nautilus-toolbar-menu-sections.h"
-
-/* Keep values in sync with the org.gnome.nautilus.FolderView schema enums: */
-#define NAUTILUS_VIEW_GRID_ID            0
-#define NAUTILUS_VIEW_LIST_ID            1
-/* Special ids, not used by GSettings schemas: */
-#define NAUTILUS_VIEW_OTHER_LOCATIONS_ID 3
-#define NAUTILUS_VIEW_INVALID_ID         4
+#include "nautilus-view-info.h"
 
 G_BEGIN_DECLS
 
@@ -84,7 +78,7 @@ struct _NautilusViewInterface
         gboolean                        (*is_searching)              (NautilusView         *view);
 };
 
-GIcon *                        nautilus_view_get_icon                  (guint                 view_id);
+const gchar *                  nautilus_view_get_icon_name             (guint                 view_id);
 
 const gchar *                        nautilus_view_get_tooltip               (guint                 view_id);
 

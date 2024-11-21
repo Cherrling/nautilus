@@ -23,8 +23,8 @@
 
 #pragma once
 
+#include <adwaita.h>
 #include <gtk/gtk.h>
-#include <libhandy-1/handy.h>
 
 #include "nautilus-window-slot.h"
 
@@ -32,24 +32,14 @@ G_BEGIN_DECLS
 
 #define NAUTILUS_TYPE_TOOLBAR nautilus_toolbar_get_type()
 
-G_DECLARE_FINAL_TYPE (NautilusToolbar, nautilus_toolbar, NAUTILUS, TOOLBAR, HdyHeaderBar)
+G_DECLARE_FINAL_TYPE (NautilusToolbar, nautilus_toolbar, NAUTILUS, TOOLBAR, AdwBin)
 
 GtkWidget *nautilus_toolbar_new (void);
 
-GtkWidget *nautilus_toolbar_get_path_bar (NautilusToolbar *self);
-GtkWidget *nautilus_toolbar_get_location_entry (NautilusToolbar *self);
-
-void       nautilus_toolbar_set_show_location_entry (NautilusToolbar *self,
-                                                     gboolean show_location_entry);
+void       nautilus_toolbar_show_current_location_menu (NautilusToolbar *self);
 
 void       nautilus_toolbar_set_active_slot    (NautilusToolbar    *toolbar,
                                                 NautilusWindowSlot *slot);
-
-gboolean   nautilus_toolbar_is_menu_visible    (NautilusToolbar *toolbar);
-
-gboolean   nautilus_toolbar_is_operations_button_active (NautilusToolbar *toolbar);
-
-void       nautilus_toolbar_on_window_constructed       (NautilusToolbar *toolbar);
 
 void nautilus_toolbar_set_window_slot (NautilusToolbar    *self,
                                        NautilusWindowSlot *window_slot);

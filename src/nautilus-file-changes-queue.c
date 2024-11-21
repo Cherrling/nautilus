@@ -28,6 +28,7 @@ typedef enum
     CHANGE_FILE_INITIAL,
     CHANGE_FILE_ADDED,
     CHANGE_FILE_CHANGED,
+    CHANGE_FILE_UNMOUNTED,
     CHANGE_FILE_REMOVED,
     CHANGE_FILE_MOVED,
 } NautilusFileChangeKind;
@@ -37,97 +38,78 @@ typedef struct
     NautilusFileChangeKind kind;
     GFile *from;
     GFile *to;
-    GdkPoint point;
-    int screen;
 } NautilusFileChange;
 
-typedef struct
-{
-    GList *head;
-    GList *tail;
-    GMutex mutex;
-} NautilusFileChangesQueue;
-
-static NautilusFileChangesQueue *
-nautilus_file_changes_queue_new (void)
-{
-    NautilusFileChangesQueue *result;
-
-    result = g_new0 (NautilusFileChangesQueue, 1);
-    g_mutex_init (&result->mutex);
-
-    return result;
-}
-
-static NautilusFileChangesQueue *
+static GAsyncQueue *
 nautilus_file_changes_queue_get (void)
 {
-    static NautilusFileChangesQueue *file_changes_queue;
+    static GAsyncQueue *file_changes_queue;
+    static gsize init_value = 0;
 
-    if (file_changes_queue == NULL)
+    if (g_once_init_enter (&init_value))
     {
-        file_changes_queue = nautilus_file_changes_queue_new ();
+        file_changes_queue = g_async_queue_new ();
+        g_once_init_leave (&init_value, 1);
     }
 
     return file_changes_queue;
-}
-
-static void
-nautilus_file_changes_queue_add_common (NautilusFileChangesQueue *queue,
-                                        NautilusFileChange       *new_item)
-{
-    /* enqueue the new queue item while locking down the list */
-    g_mutex_lock (&queue->mutex);
-
-    queue->head = g_list_prepend (queue->head, new_item);
-    if (queue->tail == NULL)
-    {
-        queue->tail = queue->head;
-    }
-
-    g_mutex_unlock (&queue->mutex);
 }
 
 void
 nautilus_file_changes_queue_file_added (GFile *location)
 {
     NautilusFileChange *new_item;
-    NautilusFileChangesQueue *queue;
+    GAsyncQueue *queue;
 
     queue = nautilus_file_changes_queue_get ();
 
     new_item = g_new0 (NautilusFileChange, 1);
     new_item->kind = CHANGE_FILE_ADDED;
     new_item->from = g_object_ref (location);
-    nautilus_file_changes_queue_add_common (queue, new_item);
+    g_async_queue_push (queue, new_item);
 }
 
 void
 nautilus_file_changes_queue_file_changed (GFile *location)
 {
     NautilusFileChange *new_item;
-    NautilusFileChangesQueue *queue;
+    GAsyncQueue *queue;
 
     queue = nautilus_file_changes_queue_get ();
 
     new_item = g_new0 (NautilusFileChange, 1);
     new_item->kind = CHANGE_FILE_CHANGED;
     new_item->from = g_object_ref (location);
-    nautilus_file_changes_queue_add_common (queue, new_item);
+    g_async_queue_push (queue, new_item);
+}
+
+/* A specialized variant of nautilus_file_changes_queue_file_removed(). */
+void
+nautilus_file_changes_queue_file_unmounted (GFile *location)
+{
+    NautilusFileChange *new_item;
+    GAsyncQueue *queue;
+
+    queue = nautilus_file_changes_queue_get ();
+
+    new_item = g_new0 (NautilusFileChange, 1);
+    new_item->kind = CHANGE_FILE_UNMOUNTED;
+    new_item->from = g_object_ref (location);
+    g_async_queue_push (queue, new_item);
 }
 
 void
 nautilus_file_changes_queue_file_removed (GFile *location)
 {
     NautilusFileChange *new_item;
-    NautilusFileChangesQueue *queue;
+    GAsyncQueue *queue;
 
     queue = nautilus_file_changes_queue_get ();
 
     new_item = g_new0 (NautilusFileChange, 1);
     new_item->kind = CHANGE_FILE_REMOVED;
     new_item->from = g_object_ref (location);
-    nautilus_file_changes_queue_add_common (queue, new_item);
+    g_async_queue_push (queue, new_item);
 }
 
 void
@@ -135,7 +117,7 @@ nautilus_file_changes_queue_file_moved (GFile *from,
                                         GFile *to)
 {
     NautilusFileChange *new_item;
-    NautilusFileChangesQueue *queue;
+    GAsyncQueue *queue;
 
     queue = nautilus_file_changes_queue_get ();
 
@@ -143,43 +125,8 @@ nautilus_file_changes_queue_file_moved (GFile *from,
     new_item->kind = CHANGE_FILE_MOVED;
     new_item->from = g_object_ref (from);
     new_item->to = g_object_ref (to);
-    nautilus_file_changes_queue_add_common (queue, new_item);
+    g_async_queue_push (queue, new_item);
 }
-
-static NautilusFileChange *
-nautilus_file_changes_queue_get_change (NautilusFileChangesQueue *queue)
-{
-    GList *new_tail;
-    NautilusFileChange *result;
-
-    g_assert (queue != NULL);
-
-    /* dequeue the tail item while locking down the list */
-    g_mutex_lock (&queue->mutex);
-
-    if (queue->tail == NULL)
-    {
-        result = NULL;
-    }
-    else
-    {
-        new_tail = queue->tail->prev;
-        result = queue->tail->data;
-        queue->head = g_list_remove_link (queue->head,
-                                          queue->tail);
-        g_list_free_1 (queue->tail);
-        queue->tail = new_tail;
-    }
-
-    g_mutex_unlock (&queue->mutex);
-
-    return result;
-}
-
-enum
-{
-    CONSUME_CHANGES_MAX_CHUNK = 20
-};
 
 static void
 pairs_list_free (GList *pairs)
@@ -205,14 +152,13 @@ pairs_list_free (GList *pairs)
  * in a list to the different nautilus_directory_notify calls
  */
 void
-nautilus_file_changes_consume_changes (gboolean consume_all)
+nautilus_file_changes_consume_changes (void)
 {
-    g_autoptr (NautilusTagManager) tag_manager = nautilus_tag_manager_get ();
     NautilusFileChange *change;
     GList *additions, *changes, *deletions, *moves;
+    GList *unmounts = NULL;
     GFilePair *pair;
-    guint chunk_count;
-    NautilusFileChangesQueue *queue;
+    GAsyncQueue *queue;
     gboolean flush_needed;
 
 
@@ -228,9 +174,9 @@ nautilus_file_changes_consume_changes (gboolean consume_all)
      * This is to ensure that the changes get sent off in the same order that they
      * arrived.
      */
-    for (chunk_count = 0;; chunk_count++)
+    for (;;)
     {
-        change = nautilus_file_changes_queue_get_change (queue);
+        change = g_async_queue_try_pop (queue);
 
         /* figure out if we need to flush the pending changes that we collected sofar */
 
@@ -250,11 +196,12 @@ nautilus_file_changes_consume_changes (gboolean consume_all)
             flush_needed |= moves != NULL
                             && change->kind != CHANGE_FILE_MOVED;
 
+            /* In some cases, GFileMonitor sends both DELETE and UNMOUNT events
+             * for the same location, so we want to deal with both at the same
+             * time. And even by itself, UNMOUNTED implies REMOVED anyway. */
             flush_needed |= deletions != NULL
+                            && change->kind != CHANGE_FILE_UNMOUNTED
                             && change->kind != CHANGE_FILE_REMOVED;
-
-            flush_needed |= !consume_all && chunk_count >= CONSUME_CHANGES_MAX_CHUNK;
-            /* we have reached the chunk maximum */
         }
 
         if (flush_needed)
@@ -266,6 +213,11 @@ nautilus_file_changes_consume_changes (gboolean consume_all)
 
             if (deletions != NULL)
             {
+                /* Mark unmounted files before notifying their removal, for
+                 * clients to know this is why the file is gone. */
+                nautilus_directory_mark_files_unmounted (unmounts);
+                g_clear_list (&unmounts, g_object_unref);
+
                 deletions = g_list_reverse (deletions);
                 nautilus_directory_notify_files_removed (deletions);
                 g_list_free_full (deletions, g_object_unref);
@@ -315,6 +267,13 @@ nautilus_file_changes_consume_changes (gboolean consume_all)
             }
             break;
 
+            case CHANGE_FILE_UNMOUNTED:
+            {
+                deletions = g_list_prepend (deletions, change->from);
+                unmounts = g_list_prepend (unmounts, g_object_ref (change->from));
+            }
+            break;
+
             case CHANGE_FILE_REMOVED:
             {
                 deletions = g_list_prepend (deletions, change->from);
@@ -323,7 +282,7 @@ nautilus_file_changes_consume_changes (gboolean consume_all)
 
             case CHANGE_FILE_MOVED:
             {
-                nautilus_tag_manager_update_moved_uris (tag_manager,
+                nautilus_tag_manager_update_moved_uris (nautilus_tag_manager_get (),
                                                         change->from,
                                                         change->to);
 

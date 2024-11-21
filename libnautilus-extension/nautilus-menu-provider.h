@@ -33,11 +33,7 @@
 #endif
 
 #include <glib-object.h>
-#include <gtk/gtk.h>
 #include "nautilus-file-info.h"
-/* These should be removed at some point. */
-#include "nautilus-extension-types.h"
-#include "nautilus-menu.h"
 
 G_BEGIN_DECLS
 
@@ -46,9 +42,6 @@ G_BEGIN_DECLS
 G_DECLARE_INTERFACE (NautilusMenuProvider, nautilus_menu_provider,
                      NAUTILUS, MENU_PROVIDER,
                      GObject)
-
-/* For compatibility reasons, remove this once you start introducing breaking changes. */
-typedef NautilusMenuProviderInterface NautilusMenuProviderIface;
 
 /**
  * SECTION:nautilus-menu-provider
@@ -74,34 +67,28 @@ struct _NautilusMenuProviderInterface
     GTypeInterface g_iface;
 
     GList *(*get_file_items)       (NautilusMenuProvider *provider,
-                                    GtkWidget            *window,
                                     GList                *files);
     GList *(*get_background_items) (NautilusMenuProvider *provider,
-                                    GtkWidget            *window,
                                     NautilusFileInfo     *current_folder);
 };
 
 /**
  * nautilus_menu_provider_get_file_items:
  * @provider: a #NautilusMenuProvider
- * @window: the parent #GtkWidget window
  * @files: (element-type NautilusFileInfo): a list of #NautilusFileInfo
  *
  * Returns: (nullable) (element-type NautilusMenuItem) (transfer full): the provided list of #NautilusMenuItem.
  */
 GList  *nautilus_menu_provider_get_file_items           (NautilusMenuProvider *provider,
-                                                         GtkWidget            *window,
                                                          GList                *files);
 /**
  * nautilus_menu_provider_get_background_items:
  * @provider: a #NautilusMenuProvider
- * @window: the parent #GtkWidget window
  * @current_folder: the folder for which background items are requested
  *
  * Returns: (nullable) (element-type NautilusMenuItem) (transfer full): the provided list of #NautilusMenuItem.
  */
 GList *nautilus_menu_provider_get_background_items      (NautilusMenuProvider *provider,
-                                                         GtkWidget            *window,
                                                          NautilusFileInfo     *current_folder);
 
 /**

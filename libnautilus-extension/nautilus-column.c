@@ -21,7 +21,6 @@
  *
  */
 
-#include <gtk/gtk.h>
 #include "nautilus-column.h"
 
 enum
@@ -34,6 +33,7 @@ enum
     PROP_DESCRIPTION,
     PROP_XALIGN,
     PROP_DEFAULT_SORT_ORDER,
+    PROP_VISIBLE,
     LAST_PROP
 };
 
@@ -46,7 +46,8 @@ struct _NautilusColumn
     char *label;
     char *description;
     float xalign;
-    GtkSortType default_sort_order;
+    int default_sort_order; /* Actually, meant to store GtkSortType */
+    gboolean visible;
 };
 
 G_DEFINE_TYPE (NautilusColumn, nautilus_column, G_TYPE_OBJECT);
@@ -124,7 +125,13 @@ nautilus_column_get_property (GObject    *object,
 
         case PROP_DEFAULT_SORT_ORDER:
         {
-            g_value_set_enum (value, column->default_sort_order);
+            g_value_set_int (value, column->default_sort_order);
+        }
+        break;
+
+        case PROP_VISIBLE:
+        {
+            g_value_set_boolean (value, column->visible);
         }
         break;
 
@@ -189,8 +196,14 @@ nautilus_column_set_property (GObject      *object,
 
         case PROP_DEFAULT_SORT_ORDER:
         {
-            column->default_sort_order = g_value_get_enum (value);
+            column->default_sort_order = g_value_get_int (value);
             g_object_notify (object, "default-sort-order");
+        }
+        break;
+
+        case PROP_VISIBLE:
+        {
+            column->visible = g_value_get_boolean (value);
         }
         break;
 
@@ -229,6 +242,11 @@ nautilus_column_class_init (NautilusColumnClass *class)
     G_OBJECT_CLASS (class)->get_property = nautilus_column_get_property;
     G_OBJECT_CLASS (class)->set_property = nautilus_column_set_property;
 
+    /**
+     * NautilusColumn:name:
+     *
+     * The identifier for the column.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_NAME,
                                      g_param_spec_string ("name",
@@ -236,6 +254,12 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                           "Name of the column",
                                                           NULL,
                                                           G_PARAM_CONSTRUCT_ONLY | G_PARAM_WRITABLE | G_PARAM_READABLE));
+
+    /**
+     * NautilusColumn:attribute:
+     *
+     * The file attribute to be displayed in the column.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_ATTRIBUTE,
                                      g_param_spec_string ("attribute",
@@ -243,6 +267,12 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                           "The attribute name to display",
                                                           NULL,
                                                           G_PARAM_READWRITE));
+
+    /**
+     * NautilusColumn:attribute_q:
+     *
+     * The name of the attribute to display, in quark form.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_ATTRIBUTE_Q,
                                      g_param_spec_uint ("attribute_q",
@@ -250,6 +280,12 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                         "The attribute name to display, in quark form",
                                                         0, G_MAXUINT, 0,
                                                         G_PARAM_READABLE));
+
+    /**
+     * NautilusColumn:label:
+     *
+     * The label to display in the column.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_LABEL,
                                      g_param_spec_string ("label",
@@ -257,6 +293,12 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                           "Label to display in the column",
                                                           NULL,
                                                           G_PARAM_READWRITE));
+
+    /**
+     * NautilusColumn:description:
+     *
+     * The user-visible description of the column.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_DESCRIPTION,
                                      g_param_spec_string ("description",
@@ -265,6 +307,11 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                           NULL,
                                                           G_PARAM_READWRITE));
 
+    /**
+     * NautilusColumn:xalign:
+     *
+     * The x-alignment of the column.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_XALIGN,
                                      g_param_spec_float ("xalign",
@@ -274,12 +321,35 @@ nautilus_column_class_init (NautilusColumnClass *class)
                                                          1.0,
                                                          0.0,
                                                          G_PARAM_READWRITE));
+    /**
+     * NautilusColumn:default-sort-order: (type gboolean)
+     *
+     * Actually meant to store the enum values of GtkSortType, but we don't want
+     * extensions to depend on GTK. Also, this is for internal consumption only.
+     *
+     * Stability: Private: Internal to the application.
+     */
     g_object_class_install_property (G_OBJECT_CLASS (class),
                                      PROP_DEFAULT_SORT_ORDER,
-                                     g_param_spec_enum ("default-sort-order",
-                                                        "Default sort order",
-                                                        "Default sort order",
-                                                        GTK_TYPE_SORT_TYPE,
-                                                        GTK_SORT_ASCENDING,
-                                                        G_PARAM_READWRITE));
+                                     g_param_spec_int ("default-sort-order",
+                                                       "Default sort order",
+                                                       "Default sort order",
+                                                       G_MININT, G_MAXINT, 0,
+                                                       G_PARAM_READWRITE));
+
+    /**
+     * NautilusColumn:visible: (type gboolean)
+     *
+     * Whether to show the NautilusColumn in a ColumnChooser.
+     * This is not meant to be used by extensions. The value may be changed
+     * over the life of the NautilusColumn.
+     *
+     * Stability: Private: Internal to the application.
+     */
+    g_object_class_install_property (G_OBJECT_CLASS (class),
+                                     PROP_VISIBLE,
+                                     g_param_spec_boolean ("visible",
+                                                           NULL, NULL,
+                                                           FALSE,
+                                                           G_PARAM_READWRITE));
 }

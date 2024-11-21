@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include <eel/eel-vfs-extensions.h>
 #include <gio/gio.h>
 #include <nautilus-extension.h>
 
@@ -34,7 +33,6 @@ typedef struct DirectoryCountState DirectoryCountState;
 typedef struct DeepCountState DeepCountState;
 typedef struct GetInfoState GetInfoState;
 typedef struct NewFilesState NewFilesState;
-typedef struct MimeListState MimeListState;
 typedef struct ThumbnailState ThumbnailState;
 typedef struct MountState MountState;
 typedef struct FilesystemInfoState FilesystemInfoState;
@@ -44,7 +42,6 @@ typedef enum {
 	REQUEST_DIRECTORY_COUNT,
 	REQUEST_FILE_INFO,
 	REQUEST_FILE_LIST, /* always FALSE if file != NULL */
-	REQUEST_MIME_LIST,
 	REQUEST_EXTENSION_INFO,
 	REQUEST_THUMBNAIL,
 	REQUEST_MOUNT,
@@ -59,7 +56,7 @@ typedef gint32 RequestCounter[REQUEST_TYPE_LAST];
 #define REQUEST_WANTS_TYPE(request, type) ((request) & (1<<(type)))
 #define REQUEST_SET_TYPE(request, type) (request) |= (1<<(type))
 
-struct NautilusDirectoryDetails
+struct NautilusDirectoryPrivate
 {
 	/* The location. */
 	GFile *location;
@@ -70,9 +67,9 @@ struct NautilusDirectoryDetails
 	GHashTable *file_hash;
 
 	/* Queues of files needing some I/O done. */
-	NautilusFileQueue *high_priority_queue;
-	NautilusFileQueue *low_priority_queue;
-	NautilusFileQueue *extension_queue;
+	NautilusHashQueue *high_priority_queue;
+	NautilusHashQueue *low_priority_queue;
+	NautilusHashQueue *extension_queue;
 
 	/* These lists are going to be pretty short.  If we think they
 	 * are going to get big, we can use hash tables instead.
@@ -100,12 +97,16 @@ struct NautilusDirectoryDetails
 
 	GList *new_files_in_progress; /* list of NewFilesState * */
 
+	/* List of GFile's that received CHANGE events while new files were being added in
+	 * that same folder. We will process this CHANGE events after new_files_in_progress
+	 * list is finished. See Bug 703179 and issue #1576 for a case when this happens.
+	 */
+	GList *files_changed_while_adding;
+
 	DirectoryCountState *count_in_progress;
 
 	NautilusFile *deep_count_file;
 	DeepCountState *deep_count_in_progress;
-
-	MimeListState *mime_list_in_progress;
 
 	NautilusFile *get_info_file;
 	GetInfoState *get_info_in_progress;
@@ -156,13 +157,11 @@ void               nautilus_directory_monitor_remove_internal         (NautilusD
 void               nautilus_directory_get_info_for_new_files          (NautilusDirectory         *directory,
 								       GList                     *vfs_uris);
 NautilusFile *     nautilus_directory_get_existing_corresponding_file (NautilusDirectory         *directory);
-void               nautilus_directory_invalidate_count_and_mime_list  (NautilusDirectory         *directory);
+void               nautilus_directory_invalidate_count                (NautilusDirectory         *directory);
 gboolean           nautilus_directory_is_file_list_monitored          (NautilusDirectory         *directory);
 gboolean           nautilus_directory_is_anyone_monitoring_file_list  (NautilusDirectory         *directory);
-gboolean           nautilus_directory_has_active_request_for_file     (NautilusDirectory         *directory,
+gboolean           nautilus_directory_has_request_for_file            (NautilusDirectory         *directory,
 								       NautilusFile              *file);
-void               nautilus_directory_remove_file_monitor_link        (NautilusDirectory         *directory,
-								       GList                     *link);
 void               nautilus_directory_schedule_dequeue_pending        (NautilusDirectory         *directory);
 void               nautilus_directory_stop_monitoring_file_list       (NautilusDirectory         *directory);
 void               nautilus_directory_cancel                          (NautilusDirectory         *directory);

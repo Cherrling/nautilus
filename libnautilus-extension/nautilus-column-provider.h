@@ -34,9 +34,6 @@
 #endif
 
 #include <glib-object.h>
-/* These should be removed at some point. */
-#include "nautilus-extension-types.h"
-#include "nautilus-column.h"
 
 G_BEGIN_DECLS
 
@@ -45,9 +42,6 @@ G_BEGIN_DECLS
 G_DECLARE_INTERFACE (NautilusColumnProvider, nautilus_column_provider,
                      NAUTILUS, COLUMN_PROVIDER,
                      GObject)
-
-/* For compatibility reasons, remove this once you start introducing breaking changes. */
-typedef NautilusColumnProviderInterface NautilusColumnProviderIface;
 
 /**
  * SECTION:nautilus-column-provider
@@ -77,7 +71,7 @@ struct _NautilusColumnProviderInterface
  * nautilus_column_provider_get_columns:
  * @provider: a #NautilusColumnProvider
  *
- * Returns: (element-type NautilusColumn) (transfer full): the provided #NautilusColumn objects
+ * Returns: (nullable) (element-type NautilusColumn) (transfer full): the provided #NautilusColumn objects
  */
 GList *nautilus_column_provider_get_columns (NautilusColumnProvider *provider);
 

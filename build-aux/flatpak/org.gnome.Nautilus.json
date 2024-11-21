@@ -10,19 +10,32 @@
     "nightly"
   ],
   "finish-args": [
+    "--device=dri",
     "--share=ipc",
     "--socket=x11",
     "--socket=wayland",
     "--talk-name=org.gnome.OnlineAccounts",
     "--filesystem=host",
-    "--talk-name=org.gtk.vfs",
+    "--filesystem=/tmp",
     "--talk-name=org.gtk.vfs.*",
+    "--talk-name=org.gtk.MountOperationHandler",
     "--filesystem=xdg-run/gvfsd",
     "--filesystem=xdg-run/dconf",
     "--filesystem=~/.config/dconf:ro",
     "--talk-name=ca.desrt.dconf",
+    "--talk-name=org.gnome.NautilusPreviewer",
+    "--talk-name=org.gnome.NautilusPreviewerDevel",
+    "--talk-name=org.gnome.DiskUtility",
+    "--talk-name=org.gnome.Settings",
+    "--talk-name=org.gnome.Console",
+    "--talk-name=org.gnome.Mutter.ServiceChannel",
     "--env=DCONF_USER_CONFIG_DIR=.config/dconf",
-    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:FileSystem;tracker:Documents"
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:Audio",
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:Documents",
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:FileSystem",
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:Pictures",
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:Music",
+    "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:Video"
   ],
   "modules": [
     {
@@ -48,23 +61,22 @@
         "--libdir=/app/lib",
         "-Dintrospection=false",
         "-Dvapi=false",
-        "-Dpython3=false",
-        "-Dpython3_girdir=no"
+        "-Dpython3=false"
       ],
       "sources": [
         {
           "type": "git",
           "url": "https://gitlab.gnome.org/GNOME/gexiv2.git",
-          "branch": "gexiv2-0.12"
+          "tag": "gexiv2-0.14.2"
         }
       ]
     },
     {
-      "name": "tracker-miners",
+      "name": "localsearch",
       "buildsystem": "meson",
       "cleanup": [
         "/etc",
-        "/libexec/tracker-3",
+        "/libexec/localsearch-3",
         "/share/dbus-1/services/org.freedesktop.Tracker3.Miner.Extract.service",
         "/share/dbus-1/services/org.freedesktop.Tracker3.Miner.Files.service",
         "/share/dbus-1/services/org.freedesktop.Tracker3.Miner.Files.Control.service"
@@ -72,17 +84,19 @@
       "config-opts": [
         "-Dextract=true",
         "-Dgeneric_media_extractor=none",
+        "-Dlandlock=disabled",
         "-Dman=false",
         "-Dminer_fs=true",
         "-Dminer_rss=false",
         "-Dsystemd_user_services=false",
-        "-Dwriteback=false"
+        "-Dwriteback=false",
+        "-Dbattery_detection=none"
       ],
       "sources": [
         {
           "type": "git",
-          "url": "https://gitlab.gnome.org/GNOME/tracker-miners.git",
-          "branch": "master"
+          "url": "https://gitlab.gnome.org/GNOME/localsearch.git",
+          "branch": "main"
         }
       ]
     },
@@ -117,20 +131,53 @@
       "buildsystem": "meson",
       "builddir": true,
       "config-opts": [
+        "-Ddocs=false",
+        "-Dbackend-gtk4=enabled",
+        "-Dbackend-gtk3=disabled",
+        "-Dbackend-qt5=disabled",
+        "-Dvapi=false",
         "--libdir=/app/lib",
         "--buildtype=debugoptimized"
       ],
       "sources" : [
         {
           "type": "git",
-          "url": "https://github.com/flatpak/libportal.git"
+          "url": "https://github.com/flatpak/libportal.git",
+          "branch": "main"
+        }
+      ]
+    },
+    {
+      "name": "libcloudproviders",
+      "buildsystem": "meson",
+      "builddir": true,
+      "config-opts": [
+      	"-Dvapigen=false"
+      ],
+      "sources" : [
+        {
+          "type": "git",
+          "url": "https://gitlab.gnome.org/World/libcloudproviders.git"
         }
       ]
     },
     {
       "buildsystem": "meson",
+      "run-tests": true,
       "builddir": true,
       "name": "nautilus",
+      "build-options": {
+        "test-args": [
+          "--device=dri",
+          "--share=ipc",
+          "--socket=fallback-x11",
+          "--socket=wayland",
+          "--talk-name=org.gtk.vfs.*",
+          "--talk-name=org.gtk.MountOperationHandler",
+          "--filesystem=xdg-run/gvfsd",
+          "--add-policy=Tracker3.dbus:org.freedesktop.Tracker3.Miner.Files=tracker:FileSystem"
+        ]
+      },
       "config-opts": [
         "--libdir=/app/lib",
         "-Dprofile=Devel",
@@ -139,7 +186,8 @@
       "sources": [
         {
           "type": "git",
-          "url": "https://gitlab.gnome.org/GNOME/nautilus.git"
+          "url": "https://gitlab.gnome.org/GNOME/nautilus.git",
+          "branch": "main"
         }
       ]
     }

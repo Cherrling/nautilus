@@ -22,6 +22,7 @@
 
 #include <config.h>
 
+#include <adwaita.h>
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
@@ -30,8 +31,6 @@
 #include <gio/gio.h>
 
 #include <glib/gi18n.h>
-
-#include "nautilus-icon-info.h"
 
 typedef struct
 {
@@ -49,7 +48,7 @@ autorun_software_dialog_destroy (AutorunSoftwareDialogData *data)
                                           G_CALLBACK (autorun_software_dialog_mount_unmounted),
                                           data);
 
-    gtk_widget_destroy (GTK_WIDGET (data->dialog));
+    gtk_window_destroy (GTK_WINDOW (data->dialog));
     g_object_unref (data->mount);
     g_free (data);
 }
@@ -64,7 +63,7 @@ autorun_software_dialog_mount_unmounted (GMount                    *mount,
 static gboolean
 _check_file (GFile      *mount_root,
              const char *file_path,
-             gboolean    must_be_executable)
+             gboolean   *executable)
 {
     g_autoptr (GFile) file = NULL;
     g_autoptr (GFileInfo) file_info = NULL;
@@ -81,10 +80,9 @@ _check_file (GFile      *mount_root,
         return FALSE;
     }
 
-    if (must_be_executable &&
-        !g_file_info_get_attribute_boolean (file_info, G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE))
+    if (executable != NULL)
     {
-        return FALSE;
+        *executable = g_file_info_get_attribute_boolean (file_info, G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE);
     }
 
     return TRUE;
@@ -100,6 +98,7 @@ autorun (GMount *mount)
     g_autofree char *path_to_spawn = NULL;
     g_autofree char *cwd_for_program = NULL;
     g_autofree char *program_parameter = NULL;
+    gboolean executable = TRUE;
 
     root = g_mount_get_root (mount);
 
@@ -110,15 +109,15 @@ autorun (GMount *mount)
      * the ordering does matter.
      */
 
-    if (_check_file (root, ".autorun", TRUE))
+    if (_check_file (root, ".autorun", &executable) && executable)
     {
         program_to_spawn = g_file_get_child (root, ".autorun");
     }
-    else if (_check_file (root, "autorun", TRUE))
+    else if (_check_file (root, "autorun", &executable) && executable)
     {
         program_to_spawn = g_file_get_child (root, "autorun");
     }
-    else if (_check_file (root, "autorun.sh", TRUE))
+    else if (_check_file (root, "autorun.sh", NULL))
     {
         program_to_spawn = g_file_new_for_path ("/bin/sh");
         program_parameter_file = g_file_get_child (root, "autorun.sh");
@@ -146,25 +145,35 @@ autorun (GMount *mount)
         error_string = g_strdup_printf (_("Unable to start the program:\n%s"), strerror (errno));
         goto out;
     }
+    else if (!executable)
+    {
+        error_string = g_strdup (_("The program is not marked as executable."));
+        goto out;
+    }
     error_string = g_strdup_printf (_("Unable to locate the program"));
 
 out:
     if (error_string != NULL)
     {
         GtkWidget *dialog;
-        dialog = gtk_message_dialog_new_with_markup (NULL,         /* TODO: parent window? */
-                                                     0,
-                                                     GTK_MESSAGE_ERROR,
-                                                     GTK_BUTTONS_OK,
-                                                     _("Oops! There was a problem running this software."));
-        gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), "%s", error_string);
-        /* This is required because we don't show dialogs in the
-         *  window picker and if the window pops under another window
-         *  there is no way to get it back. */
-        gtk_window_set_keep_above (GTK_WINDOW (dialog), TRUE);
+        dialog = adw_message_dialog_new (NULL,
+                                         _("Oops! There was a problem running this software."),
+                                         error_string);
+        adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog), "ok", _("_OK"));
+        adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "ok");
 
-        gtk_dialog_run (GTK_DIALOG (dialog));
-        gtk_widget_destroy (dialog);
+        gtk_window_present (GTK_WINDOW (dialog));
+    }
+}
+
+static void
+autorun_software_dialog_response (GtkDialog *dialog,
+                                  gchar     *response,
+                                  GMount    *mount)
+{
+    if (g_strcmp0 (response, "run") == 0)
+    {
+        autorun (mount);
     }
 }
 
@@ -172,29 +181,16 @@ static void
 present_autorun_for_software_dialog (GMount *mount)
 {
     GIcon *icon;
-    int icon_size;
-    g_autoptr (NautilusIconInfo) icon_info = NULL;
-    g_autoptr (GdkPixbuf) pixbuf = NULL;
     g_autofree char *mount_name = NULL;
     GtkWidget *dialog;
     AutorunSoftwareDialogData *data;
 
     mount_name = g_mount_get_name (mount);
 
-    dialog = gtk_message_dialog_new (NULL,     /* TODO: parent window? */
-                                     0,
-                                     GTK_MESSAGE_OTHER,
-                                     GTK_BUTTONS_CANCEL,
-                                     _("“%s” contains software intended to be automatically started. Would you like to run it?"),
-                                     mount_name);
-    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                              "%s",
-                                              _("If you don’t trust this location or aren’t sure, press Cancel."));
-
-    /* This is required because we don't show dialogs in the
-     *  window picker and if the window pops under another window
-     *  there is no way to get it back. */
-    gtk_window_set_keep_above (GTK_WINDOW (dialog), TRUE);
+    dialog = adw_message_dialog_new (NULL, NULL, _("If you don’t trust this location or aren’t sure, press Cancel."));
+    adw_message_dialog_format_heading (ADW_MESSAGE_DIALOG (dialog),
+                                       _("“%s” contains software intended to be automatically started. Would you like to run it?"),
+                                       mount_name);
 
     /* TODO: in a star trek future add support for verifying
      * software on media (e.g. if it has a certificate, check it
@@ -203,12 +199,17 @@ present_autorun_for_software_dialog (GMount *mount)
 
 
     icon = g_mount_get_icon (mount);
-    icon_size = nautilus_get_icon_size_for_stock_size (GTK_ICON_SIZE_DIALOG);
-    icon_info = nautilus_icon_info_lookup (icon, icon_size,
-                                           gtk_widget_get_scale_factor (GTK_WIDGET (dialog)));
-    pixbuf = nautilus_icon_info_get_pixbuf_at_size (icon_info, icon_size);
+    if (G_IS_THEMED_ICON (icon))
+    {
+        const gchar * const *names;
 
-    gtk_window_set_icon (GTK_WINDOW (dialog), pixbuf);
+        names = g_themed_icon_get_names (G_THEMED_ICON (icon));
+
+        if (names != NULL)
+        {
+            gtk_window_set_icon_name (GTK_WINDOW (dialog), names[0]);
+        }
+    }
 
     data = g_new0 (AutorunSoftwareDialogData, 1);
     data->dialog = dialog;
@@ -219,17 +220,18 @@ present_autorun_for_software_dialog (GMount *mount)
                       G_CALLBACK (autorun_software_dialog_mount_unmounted),
                       data);
 
-    gtk_dialog_add_button (GTK_DIALOG (dialog),
-                           _("_Run"),
-                           GTK_RESPONSE_OK);
+    adw_message_dialog_add_responses (ADW_MESSAGE_DIALOG (dialog),
+                                      "cancel", _("_Cancel"),
+                                      "run", _("_Run"),
+                                      NULL);
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "cancel");
 
-    gtk_widget_show_all (dialog);
+    g_signal_connect (dialog,
+                      "response",
+                      G_CALLBACK (autorun_software_dialog_response),
+                      mount);
 
-    if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_OK)
-    {
-        gtk_widget_destroy (dialog);
-        autorun (mount);
-    }
+    gtk_window_present (GTK_WINDOW (dialog));
 }
 
 int
@@ -245,7 +247,8 @@ main (int   argc,
     bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
     textdomain (GETTEXT_PACKAGE);
 
-    gtk_init (&argc, &argv);
+    gtk_init ();
+    adw_init ();
 
     if (argc != 2)
     {
@@ -276,6 +279,11 @@ main (int   argc,
     }
 
     present_autorun_for_software_dialog (mount);
+
+    while (g_list_model_get_n_items (gtk_window_get_toplevels ()) > 0)
+    {
+        g_main_context_iteration (NULL, TRUE);
+    }
 
 out:
     return 0;

@@ -159,13 +159,9 @@ vfs_file_set_metadata (NautilusFile *file,
                        const char   *key,
                        const char   *value)
 {
-    GFileInfo *info;
-    GFile *location;
-    char *gio_key;
+    g_autoptr (GFileInfo) info = g_file_info_new ();
+    g_autofree char *gio_key = g_strconcat ("metadata::", key, NULL);
 
-    info = g_file_info_new ();
-
-    gio_key = g_strconcat ("metadata::", key, NULL);
     if (value != NULL)
     {
         g_file_info_set_attribute_string (info, gio_key, value);
@@ -177,9 +173,14 @@ vfs_file_set_metadata (NautilusFile *file,
                                    G_FILE_ATTRIBUTE_TYPE_INVALID,
                                    NULL);
     }
-    g_free (gio_key);
 
-    location = nautilus_file_get_location (file);
+    if (g_strcmp0 (g_getenv ("RUNNING_TESTS"), "TRUE") == 0)
+    {
+        nautilus_file_update_metadata_from_info (file, info);
+        return;
+    }
+
+    g_autoptr (GFile) location = nautilus_file_get_location (file);
     g_file_set_attributes_async (location,
                                  info,
                                  0,
@@ -187,8 +188,6 @@ vfs_file_set_metadata (NautilusFile *file,
                                  NULL,
                                  set_metadata_callback,
                                  nautilus_file_ref (file));
-    g_object_unref (location);
-    g_object_unref (info);
 }
 
 static void
@@ -196,17 +195,25 @@ vfs_file_set_metadata_as_list (NautilusFile  *file,
                                const char    *key,
                                char         **value)
 {
-    GFile *location;
-    GFileInfo *info;
-    char *gio_key;
+    g_autoptr (GFileInfo) info = g_file_info_new ();
+    g_autofree char *gio_key = g_strconcat ("metadata::", key, NULL);
 
-    info = g_file_info_new ();
+    if (value == NULL)
+    {
+        g_file_info_set_attribute (info, gio_key, G_FILE_ATTRIBUTE_TYPE_INVALID, NULL);
+    }
+    else
+    {
+        g_file_info_set_attribute_stringv (info, gio_key, value);
+    }
 
-    gio_key = g_strconcat ("metadata::", key, NULL);
-    g_file_info_set_attribute_stringv (info, gio_key, value);
-    g_free (gio_key);
+    if (g_strcmp0 (g_getenv ("RUNNING_TESTS"), "TRUE") == 0)
+    {
+        nautilus_file_update_metadata_from_info (file, info);
+        return;
+    }
 
-    location = nautilus_file_get_location (file);
+    g_autoptr (GFile) location = nautilus_file_get_location (file);
     g_file_set_attributes_async (location,
                                  info,
                                  0,
@@ -214,124 +221,6 @@ vfs_file_set_metadata_as_list (NautilusFile  *file,
                                  NULL,
                                  set_metadata_callback,
                                  nautilus_file_ref (file));
-    g_object_unref (info);
-    g_object_unref (location);
-}
-
-static gboolean
-vfs_file_get_date (NautilusFile     *file,
-                   NautilusDateType  date_type,
-                   time_t           *date)
-{
-    time_t atime;
-    time_t mtime;
-    time_t btime;
-    time_t recency;
-    time_t trash_time;
-
-    atime = nautilus_file_get_atime (file);
-    mtime = nautilus_file_get_mtime (file);
-    btime = nautilus_file_get_btime (file);
-    recency = nautilus_file_get_recency (file);
-    trash_time = nautilus_file_get_trash_time (file);
-
-    switch (date_type)
-    {
-        case NAUTILUS_DATE_TYPE_ACCESSED:
-        {
-            /* Before we have info on a file, the date is unknown. */
-            if (atime == 0)
-            {
-                return FALSE;
-            }
-            if (date != NULL)
-            {
-                *date = atime;
-            }
-            return TRUE;
-        }
-
-        case NAUTILUS_DATE_TYPE_MODIFIED:
-        {
-            /* Before we have info on a file, the date is unknown. */
-            if (mtime == 0)
-            {
-                return FALSE;
-            }
-            if (date != NULL)
-            {
-                *date = mtime;
-            }
-            return TRUE;
-        }
-
-        case NAUTILUS_DATE_TYPE_CREATED:
-        {
-            /* Before we have info on a file, the date is unknown. */
-            if (btime == 0)
-            {
-                return FALSE;
-            }
-            if (date != NULL)
-            {
-                *date = btime;
-            }
-            return TRUE;
-        }
-
-        case NAUTILUS_DATE_TYPE_TRASHED:
-        {
-            /* Before we have info on a file, the date is unknown. */
-            if (trash_time == 0)
-            {
-                return FALSE;
-            }
-            if (date != NULL)
-            {
-                *date = trash_time;
-            }
-            return TRUE;
-        }
-
-        case NAUTILUS_DATE_TYPE_RECENCY:
-        {
-            /* Before we have info on a file, the date is unknown. */
-            if (recency == 0)
-            {
-                return FALSE;
-            }
-            if (date != NULL)
-            {
-                *date = recency;
-            }
-            return TRUE;
-        }
-    }
-    return FALSE;
-}
-
-static char *
-vfs_file_get_where_string (NautilusFile *file)
-{
-    GFile *activation_location;
-    NautilusFile *location;
-    char *where_string;
-
-    if (!nautilus_file_is_in_recent (file))
-    {
-        location = nautilus_file_ref (file);
-    }
-    else
-    {
-        activation_location = nautilus_file_get_activation_location (file);
-        location = nautilus_file_get (activation_location);
-        g_object_unref (activation_location);
-    }
-
-    where_string = nautilus_file_get_parent_uri_for_display (location);
-
-    nautilus_file_unref (location);
-    return where_string;
 }
 
 static void
@@ -714,8 +603,6 @@ nautilus_vfs_file_class_init (NautilusVFSFileClass *klass)
     file_class->call_when_ready = vfs_file_call_when_ready;
     file_class->cancel_call_when_ready = vfs_file_cancel_call_when_ready;
     file_class->check_if_ready = vfs_file_check_if_ready;
-    file_class->get_date = vfs_file_get_date;
-    file_class->get_where_string = vfs_file_get_where_string;
     file_class->set_metadata = vfs_file_set_metadata;
     file_class->set_metadata_as_list = vfs_file_set_metadata_as_list;
     file_class->mount = vfs_file_mount;

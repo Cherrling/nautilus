@@ -24,6 +24,7 @@
 #include <gdk/gdk.h>
 #include <gio/gio.h>
 #include <gtk/gtk.h>
+#include <adwaita.h>
 
 #include "nautilus-types.h"
 
@@ -35,28 +36,27 @@ typedef enum {
 } NautilusLocationChangeType;
 
 #define NAUTILUS_TYPE_WINDOW_SLOT (nautilus_window_slot_get_type ())
-G_DECLARE_FINAL_TYPE (NautilusWindowSlot, nautilus_window_slot, NAUTILUS, WINDOW_SLOT, GtkBox)
+G_DECLARE_FINAL_TYPE (NautilusWindowSlot, nautilus_window_slot, NAUTILUS, WINDOW_SLOT, AdwBin)
 
 typedef struct
 {
-    NautilusFile *file;
-    gint view_before_search;
     GList *back_list;
     GList *forward_list;
     NautilusBookmark *current_location_bookmark;
+    NautilusQuery *current_search_query;
 } NautilusNavigationState;
 
-NautilusWindowSlot * nautilus_window_slot_new              (NautilusWindow     *window);
+NautilusWindowSlot * nautilus_window_slot_new              (NautilusMode        mode);
 
-NautilusWindow * nautilus_window_slot_get_window           (NautilusWindowSlot *slot);
-void             nautilus_window_slot_set_window           (NautilusWindowSlot *slot,
-							    NautilusWindow     *window);
+void nautilus_window_slot_open_location_full               (NautilusWindowSlot *slot,
+                                                            GFile              *location,
+                                                            NautilusOpenFlags   flags,
+                                                            GList              *new_selection);
 
-void nautilus_window_slot_open_location_full              (NautilusWindowSlot      *slot,
-                                                           GFile                   *location,
-                                                           NautilusWindowOpenFlags  flags,
-                                                           GList                   *new_selection);
-
+GtkFilter *nautilus_window_slot_get_filter                 (NautilusWindowSlot *slot);
+void nautilus_window_slot_set_filter                       (NautilusWindowSlot *slot,
+                                                            GtkFilter          *filter);
+NautilusMode nautilus_window_slot_get_mode                 (NautilusWindowSlot *slot);
 GFile * nautilus_window_slot_get_location		   (NautilusWindowSlot *slot);
 GFile * nautilus_window_slot_get_pending_location          (NautilusWindowSlot *slot);
 
@@ -73,12 +73,16 @@ void     nautilus_window_slot_stop_loading                 (NautilusWindowSlot *
 const gchar *nautilus_window_slot_get_title                (NautilusWindowSlot *slot);
 void         nautilus_window_slot_update_title		   (NautilusWindowSlot *slot);
 
-gboolean nautilus_window_slot_handle_event       	   (NautilusWindowSlot *slot,
-							    GdkEvent           *event);
+gboolean nautilus_window_slot_handle_activate_files        (NautilusWindowSlot *slot,
+                                                            GList              *files);
+gboolean nautilus_window_slot_handle_event       	   (NautilusWindowSlot    *slot,
+							    GtkEventControllerKey *controller,
+							    guint                  keyval,
+							    GdkModifierType        state);
 
 void    nautilus_window_slot_queue_reload		   (NautilusWindowSlot *slot);
 
-GIcon*   nautilus_window_slot_get_icon                     (NautilusWindowSlot *slot);
+const gchar*   nautilus_window_slot_get_icon_name                (NautilusWindowSlot *slot);
 
 const gchar*   nautilus_window_slot_get_tooltip                  (NautilusWindowSlot *slot);
 
@@ -94,7 +98,9 @@ void     nautilus_window_slot_set_active                   (NautilusWindowSlot *
                                                             gboolean            active);
 gboolean nautilus_window_slot_get_loading                  (NautilusWindowSlot *slot);
 
-gboolean nautilus_window_slot_get_searching                (NautilusWindowSlot *slot);
+gboolean nautilus_window_slot_get_search_visible           (NautilusWindowSlot *slot);
+
+gboolean nautilus_window_slot_get_search_global            (NautilusWindowSlot *self);
 
 GList* nautilus_window_slot_get_selection                  (NautilusWindowSlot *slot);
 

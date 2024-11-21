@@ -22,22 +22,49 @@
 
 #pragma once
 
+#include <adwaita.h>
 #include <gtk/gtk.h>
 
+#include "nautilus-enums.h"
+
+
+/**
+ * nautilus_capitalize_str:
+ * @string: input string
+ *
+ * Returns: a newly allocated copy of @string, with the first letter capitalized.
+ * If @string is %NULL, returns %NULL.
+ */
+char      * nautilus_capitalize_str                 (const char    *string);
 
 void        nautilus_gmenu_set_from_model           (GMenu             *target_menu,
                                                      GMenuModel        *source_model);
+gint        nautilus_g_menu_model_find_by_string    (GMenuModel        *model,
+                                                     const gchar       *attribute,
+                                                     const gchar       *string);
 
-void        nautilus_ui_frame_image                 (GdkPixbuf        **pixbuf);
-void        nautilus_ui_frame_video                 (GdkPixbuf        **pixbuf);
+void        nautilus_g_menu_model_set_for_mode      (GMenuModel        *model,
+                                                     NautilusMode       mode);
 
-gboolean    nautilus_file_date_in_between           (guint64            file_unix_time,
+void        nautilus_g_menu_model_set_for_view      (GMenuModel        *model,
+                                                     const char        *view_name);
+
+void        nautilus_g_menu_replace_string_in_item  (GMenu             *menu,
+                                                     gint               i,
+                                                     const gchar       *attribute,
+                                                     const gchar       *string);
+
+void        nautilus_ui_frame_video                 (GtkSnapshot       *snapshot,
+                                                     gdouble            width,
+                                                     gdouble            height);
+
+gboolean    nautilus_date_time_is_between_dates     (GDateTime         *date,
                                                      GDateTime         *initial_date,
                                                      GDateTime         *end_date);
 gchar     * get_text_for_date_range                 (GPtrArray         *date_range,
                                                      gboolean           prefix_with_since);
 
-GtkDialog * show_dialog                             (const gchar       *primary_text,
+AdwMessageDialog * show_dialog                      (const gchar       *primary_text,
                                                      const gchar       *secondary_text,
                                                      GtkWindow         *parent,
                                                      GtkMessageType     type);

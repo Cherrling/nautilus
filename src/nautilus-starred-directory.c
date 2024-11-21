@@ -17,16 +17,19 @@
  */
 
 #include "nautilus-starred-directory.h"
-#include "nautilus-tag-manager.h"
-#include "nautilus-file-utilities.h"
+
 #include "nautilus-directory-private.h"
+#include "nautilus-file-private.h"
+#include "nautilus-file-utilities.h"
+#include "nautilus-internal-place-file.h"
+#include "nautilus-tag-manager.h"
+#include "nautilus-scheme.h"
 #include <glib/gi18n.h>
 
 struct _NautilusFavoriteDirectory
 {
     NautilusDirectory parent_slot;
 
-    NautilusTagManager *tag_manager;
     GList *files;
 
     GList *monitor_list;
@@ -94,40 +97,44 @@ disconnect_and_unmonitor_file (NautilusFile              *file,
 }
 
 static void
-nautilus_starred_directory_update_files (NautilusFavoriteDirectory *self)
+nautilus_starred_directory_update_files (NautilusFavoriteDirectory *self,
+                                         GList                     *changed_files)
 {
-    GList *l;
-    GList *tmp_l;
-    GList *new_starred_files;
+    NautilusTagManager *tag_manager = nautilus_tag_manager_get ();
     GList *monitor_list;
     FavoriteMonitor *monitor;
-    NautilusFile *file;
-    GHashTable *uri_table;
-    GList *files_added;
-    GList *files_removed;
-    gchar *uri;
-
-    files_added = NULL;
-    files_removed = NULL;
+    g_autoptr (GHashTable) uri_table = NULL;
+    GList *next;
+    g_autolist (NautilusFile) files_added = NULL;
+    g_autolist (NautilusFile) files_removed = NULL;
 
     uri_table = g_hash_table_new_full (g_str_hash,
                                        g_str_equal,
                                        (GDestroyNotify) g_free,
                                        NULL);
 
-    for (l = self->files; l != NULL; l = l->next)
+    for (GList *l = self->files; l != NULL; l = l->next)
     {
         g_hash_table_add (uri_table, nautilus_file_get_uri (NAUTILUS_FILE (l->data)));
     }
 
-    new_starred_files = nautilus_tag_manager_get_starred_files (self->tag_manager);
-
-    for (l = new_starred_files; l != NULL; l = l->next)
+    for (GList *l = changed_files; l != NULL; l = next)
     {
-        if (!g_hash_table_contains (uri_table, l->data))
-        {
-            file = nautilus_file_get_by_uri ((gchar *) l->data);
+        NautilusFile *file = l->data;
+        g_autofree char *uri = nautilus_file_get_uri (file);
 
+        next = l->next;
+        if (g_hash_table_contains (uri_table, uri) &&
+            !nautilus_tag_manager_file_is_starred (tag_manager, uri))
+        {
+            disconnect_and_unmonitor_file (file, self);
+            nautilus_file_unref (file);
+            files_removed = g_list_prepend (files_removed, nautilus_file_ref (file));
+            self->files = g_list_remove (self->files, file);
+        }
+        else if (!g_hash_table_contains (uri_table, uri) &&
+                 nautilus_tag_manager_file_is_starred (tag_manager, uri))
+        {
             for (monitor_list = self->monitor_list; monitor_list; monitor_list = monitor_list->next)
             {
                 monitor = monitor_list->data;
@@ -138,60 +145,26 @@ nautilus_starred_directory_update_files (NautilusFavoriteDirectory *self)
 
             g_signal_connect (file, "changed", G_CALLBACK (file_changed), self);
 
-            files_added = g_list_prepend (files_added, file);
-        }
-    }
-
-    l = self->files;
-    while (l != NULL)
-    {
-        uri = nautilus_file_get_uri (NAUTILUS_FILE (l->data));
-
-        if (!nautilus_tag_manager_file_is_starred (self->tag_manager, uri))
-        {
-            files_removed = g_list_prepend (files_removed,
-                                            nautilus_file_ref (NAUTILUS_FILE (l->data)));
-
-            disconnect_and_unmonitor_file (NAUTILUS_FILE (l->data), self);
-
-            if (l == self->files)
-            {
-                self->files = g_list_delete_link (self->files, l);
-                l = self->files;
-            }
-            else
-            {
-                tmp_l = l->prev;
-                self->files = g_list_delete_link (self->files, l);
-                l = tmp_l->next;
-            }
+            files_added = g_list_prepend (files_added, nautilus_file_ref (file));
+            self->files = g_list_prepend (self->files, nautilus_file_ref (file));
         }
         else
         {
-            l = l->next;
+            /* This may happen if we have moved the file and updated the starred
+             * database for the new URI. In that case, the NautilusFile instance
+             * has already updated its own URI. There's no need to re-add it. */
         }
-
-        g_free (uri);
     }
 
     if (files_added)
     {
         nautilus_directory_emit_files_added (NAUTILUS_DIRECTORY (self), files_added);
-
-        for (l = files_added; l != NULL; l = l->next)
-        {
-            self->files = g_list_prepend (self->files, nautilus_file_ref (NAUTILUS_FILE (l->data)));
-        }
     }
 
     if (files_removed)
     {
         nautilus_directory_emit_files_changed (NAUTILUS_DIRECTORY (self), files_removed);
     }
-
-    nautilus_file_list_free (files_added);
-    nautilus_file_list_free (files_removed);
-    g_hash_table_destroy (uri_table);
 }
 
 static void
@@ -203,21 +176,34 @@ on_starred_files_changed (NautilusTagManager *tag_manager,
 
     self = NAUTILUS_STARRED_DIRECTORY (user_data);
 
-    nautilus_starred_directory_update_files (self);
+    nautilus_starred_directory_update_files (self, changed_files);
+}
+
+static NautilusFile *
+real_new_file_from_filename (NautilusDirectory *directory,
+                             const char        *filename,
+                             gboolean           self_owned)
+{
+    if (!self_owned)
+    {
+        g_warning ("Creating a file within starred://. This shouldn't happen.");
+        return NAUTILUS_DIRECTORY_CLASS (nautilus_starred_directory_parent_class)->new_file_from_filename (directory, filename, self_owned);
+    }
+
+    return NAUTILUS_FILE (g_object_new (NAUTILUS_TYPE_INTERNAL_PLACE_FILE,
+                                        "directory", directory,
+                                        NULL));
 }
 
 static gboolean
 real_contains_file (NautilusDirectory *directory,
                     NautilusFile      *file)
 {
-    NautilusFavoriteDirectory *self;
     g_autofree gchar *uri = NULL;
-
-    self = NAUTILUS_STARRED_DIRECTORY (directory);
 
     uri = nautilus_file_get_uri (file);
 
-    return nautilus_tag_manager_file_is_starred (self->tag_manager, uri);
+    return nautilus_tag_manager_file_is_starred (nautilus_tag_manager_get (), uri);
 }
 
 static gboolean
@@ -243,6 +229,8 @@ real_call_when_ready (NautilusDirectory         *directory,
     callback (NAUTILUS_DIRECTORY (directory),
               file_list,
               callback_data);
+
+    nautilus_file_list_free (file_list);
 }
 
 static gboolean
@@ -334,16 +322,7 @@ real_monitor_remove (NautilusDirectory *directory,
 static gboolean
 real_handles_location (GFile *location)
 {
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (location);
-
-    if (eel_uri_is_starred (uri))
-    {
-        return TRUE;
-    }
-
-    return FALSE;
+    return g_file_has_uri_scheme (location, SCHEME_STARRED);
 }
 
 static FavoriteCallback *
@@ -442,8 +421,7 @@ real_get_file_list (NautilusDirectory *directory)
 static void
 nautilus_starred_directory_set_files (NautilusFavoriteDirectory *self)
 {
-    GList *starred_files;
-    NautilusFile *file;
+    g_autolist (NautilusFile) starred_files = NULL;
     GList *l;
     GList *file_list;
     FavoriteMonitor *monitor;
@@ -451,11 +429,11 @@ nautilus_starred_directory_set_files (NautilusFavoriteDirectory *self)
 
     file_list = NULL;
 
-    starred_files = nautilus_tag_manager_get_starred_files (self->tag_manager);
+    starred_files = nautilus_tag_manager_get_starred_files (nautilus_tag_manager_get ());
 
     for (l = starred_files; l != NULL; l = l->next)
     {
-        file = nautilus_file_get_by_uri ((gchar *) l->data);
+        NautilusFile *file = l->data;
 
         g_signal_connect (file, "changed", G_CALLBACK (file_changed), self);
 
@@ -467,10 +445,8 @@ nautilus_starred_directory_set_files (NautilusFavoriteDirectory *self)
             nautilus_file_monitor_add (file, monitor, monitor->monitor_attributes);
         }
 
-        file_list = g_list_prepend (file_list, file);
+        file_list = g_list_prepend (file_list, nautilus_file_ref (file));
     }
-
-    nautilus_directory_emit_files_added (NAUTILUS_DIRECTORY (self), file_list);
 
     self->files = file_list;
 }
@@ -495,11 +471,10 @@ nautilus_starred_directory_finalize (GObject *object)
 
     self = NAUTILUS_STARRED_DIRECTORY (object);
 
-    g_signal_handlers_disconnect_by_func (self->tag_manager,
+    g_signal_handlers_disconnect_by_func (nautilus_tag_manager_get (),
                                           on_starred_files_changed,
                                           self);
 
-    g_object_unref (self->tag_manager);
     nautilus_file_list_free (self->files);
 
     G_OBJECT_CLASS (nautilus_starred_directory_parent_class)->finalize (object);
@@ -543,6 +518,7 @@ nautilus_starred_directory_class_init (NautilusFavoriteDirectoryClass *klass)
     oclass->finalize = nautilus_starred_directory_finalize;
     oclass->dispose = nautilus_starred_directory_dispose;
 
+    directory_class->new_file_from_filename = real_new_file_from_filename;
     directory_class->handles_location = real_handles_location;
     directory_class->contains_file = real_contains_file;
     directory_class->is_editable = real_is_editable;
@@ -556,7 +532,7 @@ nautilus_starred_directory_class_init (NautilusFavoriteDirectoryClass *klass)
 }
 
 NautilusFavoriteDirectory *
-nautilus_starred_directory_new ()
+nautilus_starred_directory_new (void)
 {
     NautilusFavoriteDirectory *self;
 
@@ -568,9 +544,7 @@ nautilus_starred_directory_new ()
 static void
 nautilus_starred_directory_init (NautilusFavoriteDirectory *self)
 {
-    self->tag_manager = nautilus_tag_manager_get ();
-
-    g_signal_connect (self->tag_manager,
+    g_signal_connect (nautilus_tag_manager_get (),
                       "starred-changed",
                       (GCallback) on_starred_files_changed,
                       self);

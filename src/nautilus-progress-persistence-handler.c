@@ -89,7 +89,7 @@ action_show_file_transfers (GSimpleAction *action,
 
 static GActionEntry progress_persistence_entries[] =
 {
-    { "show-file-transfers", action_show_file_transfers, NULL, NULL, NULL }
+    { .name = "show-file-transfers", .activate = action_show_file_transfers }
 };
 
 static void
@@ -145,7 +145,7 @@ progress_persistence_handler_show_complete_notification (NautilusProgressPersist
 
     complete_notification = g_notification_new (_("File Operations"));
     g_notification_set_body (complete_notification,
-                             _("All file operations have been successfully completed"));
+                             _("All file operations have been completed"));
     nautilus_application_send_notification (self->app,
                                             "transfer-complete",
                                             complete_notification);
@@ -184,7 +184,7 @@ progress_info_finished_cb (NautilusProgressInfo               *info,
     }
     else
     {
-        if ((last_active_window == NULL) || !gtk_window_has_toplevel_focus (last_active_window))
+        if ((last_active_window == NULL) || !gtk_window_is_active (last_active_window))
         {
             progress_persistence_handler_hide_notification (self);
             progress_persistence_handler_show_complete_notification (self);
@@ -264,6 +264,8 @@ release_application (NautilusProgressInfo               *info,
 {
     /* release the GApplication hold we acquired */
     g_application_release (g_application_get_default ());
+    /* Release reference aquired when the signal was connected. */
+    g_object_unref (info);
 }
 
 static void
@@ -274,6 +276,8 @@ progress_info_started_cb (NautilusProgressInfo               *info,
 
     /* hold GApplication so we never quit while there's an operation pending */
     g_application_hold (g_application_get_default ());
+    /* Hold a ref to keep the info alive until we get the ::finished signal. */
+    g_object_ref (info);
 
     g_signal_connect (info, "finished",
                       G_CALLBACK (release_application), self);

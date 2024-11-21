@@ -6,19 +6,16 @@
 #include "src/nautilus-directory.h"
 #include "src/nautilus-file-operations.c"
 #include <unistd.h>
-#include "eel/eel-string.h"
 #include "test-utilities.h"
 
 /* Tests the function for a simple file */
 static void
 test_simple_file (void)
 {
-    g_autoptr (GFile) root = NULL;
-    g_autoptr (GFile) file = NULL;
+    g_autoptr (GFile) root = g_file_new_for_path (test_get_tmp_dir ());
+    g_autoptr (GFile) file = g_file_get_child (root, "simple_file");
+    g_autoptr (GFileOutputStream) steam = g_file_create (file, G_FILE_CREATE_NONE, NULL, NULL);
 
-    root = g_file_new_for_path (test_get_tmp_dir ());
-    file = g_file_get_child (root, "simple_file");
-    g_file_create (file, G_FILE_CREATE_NONE, NULL, NULL);
     g_assert_false (dir_has_files (file));
     g_assert_true (g_file_delete (file, NULL, NULL));
 }
@@ -32,8 +29,6 @@ test_empty_directory (void)
 
     root = g_file_new_for_path (test_get_tmp_dir ());
     child = g_file_get_child (root, "empty_dir");
-
-    g_assert_true (child != NULL);
 
     g_file_make_directory (child, NULL, NULL);
 
@@ -51,11 +46,9 @@ test_directory_one_file (void)
 
     root = g_file_new_for_path (test_get_tmp_dir ());
     parent_dir = g_file_get_child (root, "parent_dir");
-    g_assert_true (parent_dir != NULL);
     g_file_make_directory (parent_dir, NULL, NULL);
 
     child_file = g_file_get_child (parent_dir, "child_file");
-    g_assert_true (child_file != NULL);
     g_file_make_directory (child_file, NULL, NULL);
 
     g_assert_true (dir_has_files (parent_dir));

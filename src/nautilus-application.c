@@ -23,10 +23,11 @@
  *          Cosimo Cecchi <cosimoc@gnome.org>
  *
  */
+#define G_LOG_DOMAIN "nautilus-application"
 
 #include "nautilus-application.h"
 
-#include <eel/eel-gtk-extensions.h>
+#include <adwaita.h>
 #include <eel/eel-stock-dialogs.h>
 #include <fcntl.h>
 #include <gdk/gdk.h>
@@ -34,15 +35,15 @@
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
 #include <gtk/gtk.h>
-#include <libhandy-1/handy.h>
 #include <nautilus-extension.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
-#define DEBUG_FLAG NAUTILUS_DEBUG_APPLICATION
-#include "nautilus-debug.h"
+#include <xdp-gnome/externalwindow.h>
 
 #include "nautilus-bookmark-list.h"
+#include "nautilus-clipboard.h"
+#include "nautilus-date-utilities.h"
+#include "nautilus-dbus-launcher.h"
 #include "nautilus-dbus-manager.h"
 #include "nautilus-directory-private.h"
 #include "nautilus-file.h"
@@ -52,16 +53,17 @@
 #include "nautilus-freedesktop-dbus.h"
 #include "nautilus-global-preferences.h"
 #include "nautilus-icon-info.h"
-#include "nautilus-lib-self-check-functions.h"
 #include "nautilus-module.h"
-#include "nautilus-preferences-window.h"
+#include "nautilus-portal.h"
+#include "nautilus-preferences-dialog.h"
 #include "nautilus-previewer.h"
-#include "nautilus-profile.h"
 #include "nautilus-progress-persistence-handler.h"
-#include "nautilus-self-check-functions.h"
+#include "nautilus-scheme.h"
 #include "nautilus-shell-search-provider.h"
 #include "nautilus-signaller.h"
 #include "nautilus-tag-manager.h"
+#include "nautilus-tracker-utilities.h"
+#include "nautilus-trash-monitor.h"
 #include "nautilus-ui-utilities.h"
 #include "nautilus-view.h"
 #include "nautilus-window-slot.h"
@@ -72,6 +74,7 @@ typedef struct
     NautilusProgressPersistenceHandler *progress_handler;
     NautilusDBusManager *dbus_manager;
     NautilusFreedesktopDBus *fdb_manager;
+    NautilusPortal *portal_implementation;
 
     NautilusBookmarkList *bookmark_list;
 
@@ -84,12 +87,11 @@ typedef struct
     NautilusFileUndoManager *undo_manager;
 
     NautilusTagManager *tag_manager;
-    GCancellable *tag_manager_cancellable;
 
-    guint previewer_selection_id;
+    NautilusDBusLauncher *dbus_launcher;
 } NautilusApplicationPrivate;
 
-G_DEFINE_TYPE_WITH_PRIVATE (NautilusApplication, nautilus_application, GTK_TYPE_APPLICATION);
+G_DEFINE_TYPE_WITH_PRIVATE (NautilusApplication, nautilus_application, ADW_TYPE_APPLICATION);
 
 void
 nautilus_application_set_accelerator (GApplication *app,
@@ -147,8 +149,6 @@ check_required_directories (NautilusApplication *self)
 
     g_assert (NAUTILUS_IS_APPLICATION (self));
 
-    nautilus_profile_start (NULL);
-
     ret = TRUE;
 
     user_directory = nautilus_get_user_directory ();
@@ -167,7 +167,7 @@ check_required_directories (NautilusApplication *self)
         GSList *l;
         char *error_string;
         g_autofree char *detail_string = NULL;
-        GtkDialog *dialog;
+        AdwMessageDialog *dialog;
 
         ret = FALSE;
 
@@ -205,7 +205,6 @@ check_required_directories (NautilusApplication *self)
 
     g_slist_free (directories);
     g_free (user_directory);
-    nautilus_profile_end (NULL);
 
     return ret;
 }
@@ -240,8 +239,7 @@ menu_provider_init_callback (void)
 }
 
 NautilusWindow *
-nautilus_application_create_window (NautilusApplication *self,
-                                    GdkScreen           *screen)
+nautilus_application_create_window (NautilusApplication *self)
 {
     NautilusWindow *window;
     gboolean maximized;
@@ -250,9 +248,8 @@ nautilus_application_create_window (NautilusApplication *self,
     gint default_height = 0;
 
     g_return_val_if_fail (NAUTILUS_IS_APPLICATION (self), NULL);
-    nautilus_profile_start (NULL);
 
-    window = nautilus_window_new (screen);
+    window = nautilus_window_new ();
 
     maximized = g_settings_get_boolean
                     (nautilus_window_state, NAUTILUS_WINDOW_STATE_MAXIMIZED);
@@ -275,15 +272,10 @@ nautilus_application_create_window (NautilusApplication *self,
 
     if (g_strcmp0 (PROFILE, "") != 0)
     {
-        GtkStyleContext *style_context;
-
-        style_context = gtk_widget_get_style_context (GTK_WIDGET (window));
-
-        gtk_style_context_add_class (style_context, "devel");
+        gtk_widget_add_css_class (GTK_WIDGET (window), "devel");
     }
 
-    DEBUG ("Creating a new navigation window");
-    nautilus_profile_end (NULL);
+    g_debug ("Creating a new navigation window");
 
     return window;
 }
@@ -292,61 +284,55 @@ static NautilusWindowSlot *
 get_window_slot_for_location (NautilusApplication *self,
                               GFile               *location)
 {
-    NautilusApplicationPrivate *priv;
-    NautilusWindowSlot *slot;
-    NautilusWindow *window;
-    NautilusFile *file;
-    GList *l, *sl;
+    NautilusApplicationPrivate *priv = nautilus_application_get_instance_private (self);
+    g_autofree char *uri = g_file_get_uri (location);
+    g_autoptr (NautilusFile) file = nautilus_file_get_existing (location);
+    g_autoptr (GFile) searched_location = NULL;
 
-    priv = nautilus_application_get_instance_private (self);
-    slot = NULL;
-    file = nautilus_file_get (location);
-
-    if (!nautilus_file_is_directory (file) && !nautilus_file_is_other_locations (file) &&
+    if (file != NULL &&
+        !nautilus_file_is_directory (file) &&
         g_file_has_parent (location, NULL))
     {
-        location = g_file_get_parent (location);
+        searched_location = g_file_get_parent (location);
     }
     else
     {
-        g_object_ref (location);
+        searched_location = g_object_ref (location);
     }
 
-    for (l = priv->windows; l != NULL; l = l->next)
+    for (GList *l = priv->windows; l != NULL; l = l->next)
     {
-        window = l->data;
+        NautilusWindow *window = l->data;
 
-        for (sl = nautilus_window_get_slots (window); sl; sl = sl->next)
+        for (GList *sl = nautilus_window_get_slots (window); sl; sl = sl->next)
         {
-            NautilusWindowSlot *current = sl->data;
-            GFile *slot_location = nautilus_window_slot_get_location (current);
+            NautilusWindowSlot *slot = sl->data;
+            GFile *slot_location = nautilus_window_slot_get_location (slot);
 
-            if (slot_location && g_file_equal (slot_location, location))
+            if (slot_location && g_file_equal (slot_location, searched_location))
             {
-                slot = current;
-                break;
+                return slot;
             }
         }
-
-        if (slot)
-        {
-            break;
-        }
     }
 
-    nautilus_file_unref (file);
-    g_object_unref (location);
+    return NULL;
+}
 
-    return slot;
+static NautilusWindow *
+get_nautilus_window_containing_slot (NautilusWindowSlot *slot)
+{
+    return NAUTILUS_WINDOW (gtk_widget_get_ancestor (GTK_WIDGET (slot),
+                                                     NAUTILUS_TYPE_WINDOW));
 }
 
 void
-nautilus_application_open_location_full (NautilusApplication     *self,
-                                         GFile                   *location,
-                                         NautilusWindowOpenFlags  flags,
-                                         GList                   *selection,
-                                         NautilusWindow          *target_window,
-                                         NautilusWindowSlot      *target_slot)
+nautilus_application_open_location_full (NautilusApplication *self,
+                                         GFile               *location,
+                                         NautilusOpenFlags    flags,
+                                         GList               *selection,
+                                         NautilusWindow      *target_window,
+                                         NautilusWindowSlot  *target_slot)
 {
     NAUTILUS_APPLICATION_CLASS (G_OBJECT_GET_CLASS (self))->open_location_full (self,
                                                                                 location,
@@ -357,19 +343,19 @@ nautilus_application_open_location_full (NautilusApplication     *self,
 }
 
 static void
-real_open_location_full (NautilusApplication     *self,
-                         GFile                   *location,
-                         NautilusWindowOpenFlags  flags,
-                         GList                   *selection,
-                         NautilusWindow          *target_window,
-                         NautilusWindowSlot      *target_slot)
+real_open_location_full (NautilusApplication *self,
+                         GFile               *location,
+                         NautilusOpenFlags    flags,
+                         GList               *selection,
+                         NautilusWindow      *target_window,
+                         NautilusWindowSlot  *target_slot)
 {
     NautilusWindowSlot *active_slot = NULL;
     NautilusWindow *active_window;
     GFile *old_location = NULL;
     char *old_uri, *new_uri;
     gboolean use_same;
-    GdkScreen *screen;
+    GdkDisplay *display;
 
     use_same = TRUE;
     /* FIXME: We are having problems on getting the current focused window with
@@ -384,7 +370,10 @@ real_open_location_full (NautilusApplication     *self,
     {
         active_slot = nautilus_window_get_active_slot (active_window);
         /* Just for debug.*/
-        old_location = nautilus_window_slot_get_location (active_slot);
+        if (active_slot != NULL)
+        {
+            old_location = nautilus_window_slot_get_location (active_slot);
+        }
     }
 
 
@@ -400,8 +389,7 @@ real_open_location_full (NautilusApplication     *self,
 
     new_uri = g_file_get_uri (location);
 
-    DEBUG ("Application opening location, old: %s, new: %s", old_uri, new_uri);
-    nautilus_profile_start ("Application opening location, old: %s, new: %s", old_uri, new_uri);
+    g_debug ("Application opening location, old: %s, new: %s", old_uri, new_uri);
 
     g_free (old_uri);
     g_free (new_uri);
@@ -412,14 +400,14 @@ real_open_location_full (NautilusApplication     *self,
      * slot we target at */
     if (target_slot != NULL)
     {
-        target_window = nautilus_window_slot_get_window (target_slot);
+        target_window = get_nautilus_window_containing_slot (target_slot);
     }
 
-    g_assert (!((flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW) != 0 &&
-                (flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_TAB) != 0));
+    g_assert (!((flags & NAUTILUS_OPEN_FLAG_NEW_WINDOW) != 0 &&
+                (flags & NAUTILUS_OPEN_FLAG_NEW_TAB) != 0));
 
     /* and if the flags specify so, this is overridden */
-    if ((flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW) != 0)
+    if ((flags & NAUTILUS_OPEN_FLAG_NEW_WINDOW) != 0)
     {
         use_same = FALSE;
     }
@@ -435,18 +423,19 @@ real_open_location_full (NautilusApplication     *self,
             }
             else
             {
-                target_window = nautilus_window_slot_get_window (target_slot);
+                target_window = get_nautilus_window_containing_slot (target_slot);
             }
         }
     }
     else
     {
-        screen = active_window != NULL ?
-                 gtk_window_get_screen (GTK_WINDOW (active_window)) :
-                 gdk_screen_get_default ();
+        display = active_window != NULL ?
+                  gtk_root_get_display (GTK_ROOT (active_window)) :
+                  gdk_display_get_default ();
 
-        target_window = nautilus_application_create_window (self, screen);
+        target_window = nautilus_application_create_window (self);
         /* Whatever the caller says, the slot won't be the same */
+        gtk_window_set_display (GTK_WINDOW (target_window), display);
         target_slot = NULL;
     }
 
@@ -454,7 +443,7 @@ real_open_location_full (NautilusApplication     *self,
 
     /* Application is the one that manages windows, so this flag shouldn't use
      * it anymore by any client */
-    flags &= ~NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW;
+    flags &= ~NAUTILUS_OPEN_FLAG_NEW_WINDOW;
     nautilus_window_open_location_full (target_window, location, flags, selection, target_slot);
 }
 
@@ -462,10 +451,7 @@ static NautilusWindow *
 open_window (NautilusApplication *self,
              GFile               *location)
 {
-    NautilusWindow *window;
-
-    nautilus_profile_start (NULL);
-    window = nautilus_application_create_window (self, gdk_screen_get_default ());
+    NautilusWindow *window = nautilus_application_create_window (self);
 
     if (location != NULL)
     {
@@ -480,8 +466,6 @@ open_window (NautilusApplication *self,
         g_object_unref (home);
     }
 
-    nautilus_profile_end (NULL);
-
     return window;
 }
 
@@ -495,8 +479,6 @@ nautilus_application_open_location (NautilusApplication *self,
     NautilusWindowSlot *slot;
     GList *sel_list = NULL;
 
-    nautilus_profile_start (NULL);
-
     if (selection != NULL)
     {
         sel_list = g_list_prepend (sel_list, nautilus_file_get (selection));
@@ -506,11 +488,11 @@ nautilus_application_open_location (NautilusApplication *self,
 
     if (!slot)
     {
-        window = nautilus_application_create_window (self, gdk_screen_get_default ());
+        window = nautilus_application_create_window (self);
     }
     else
     {
-        window = nautilus_window_slot_get_window (slot);
+        window = get_nautilus_window_containing_slot (slot);
     }
 
     nautilus_application_open_location_full (self, location, 0, sel_list, window, slot);
@@ -519,13 +501,11 @@ nautilus_application_open_location (NautilusApplication *self,
     {
         nautilus_file_list_free (sel_list);
     }
-
-    nautilus_profile_end (NULL);
 }
 
 /* Note: when launched from command line we do not reach this method
  * since we manually handle the command line parameters in order to
- * parse --version, --check, etc.
+ * parse --version, etc.
  * However this method is called when open () is called via dbus, for
  * instance when gtk_uri_open () is called from outside.
  */
@@ -541,7 +521,7 @@ nautilus_application_open (GApplication  *app,
     GFile *file;
     gint idx;
 
-    DEBUG ("Open called on the GApplication instance; %d files", n_files);
+    g_debug ("Open called on the GApplication instance; %d files", n_files);
 
     /* Open windows at each requested location. */
     for (idx = 0; idx < n_files; idx++)
@@ -577,18 +557,19 @@ nautilus_application_finalize (GObject *object)
     g_clear_object (&priv->progress_handler);
     g_clear_object (&priv->bookmark_list);
 
-    g_clear_object (&priv->fdb_manager);
-
     g_list_free (priv->windows);
 
     g_hash_table_destroy (priv->notifications);
+
+    nautilus_module_teardown ();
 
     g_clear_object (&priv->undo_manager);
 
     g_clear_object (&priv->tag_manager);
 
-    g_cancellable_cancel (priv->tag_manager_cancellable);
-    g_clear_object (&priv->tag_manager_cancellable);
+    g_clear_object (&priv->dbus_launcher);
+
+    nautilus_trash_monitor_clear ();
 
     G_OBJECT_CLASS (nautilus_application_parent_class)->finalize (object);
 }
@@ -598,15 +579,6 @@ do_cmdline_sanity_checks (NautilusApplication *self,
                           GVariantDict        *options)
 {
     gboolean retval = FALSE;
-
-    if (g_variant_dict_contains (options, "check") &&
-        (g_variant_dict_contains (options, G_OPTION_REMAINING) ||
-         g_variant_dict_contains (options, "quit")))
-    {
-        g_printerr ("%s\n",
-                    _("--check cannot be used with other options."));
-        goto out;
-    }
 
     if (g_variant_dict_contains (options, "quit") &&
         g_variant_dict_contains (options, G_OPTION_REMAINING))
@@ -629,28 +601,6 @@ do_cmdline_sanity_checks (NautilusApplication *self,
 
 out:
     return retval;
-}
-
-static int
-do_perform_self_checks (void)
-{
-#ifndef NAUTILUS_OMIT_SELF_CHECK
-    gtk_init (NULL, NULL);
-
-    nautilus_profile_start (NULL);
-    /* Run the checks (each twice) for nautilus and libnautilus-private. */
-
-    nautilus_run_self_checks ();
-    nautilus_run_lib_self_checks ();
-    eel_exit_if_self_checks_failed ();
-
-    nautilus_run_self_checks ();
-    nautilus_run_lib_self_checks ();
-    eel_exit_if_self_checks_failed ();
-    nautilus_profile_end (NULL);
-#endif
-
-    return EXIT_SUCCESS;
 }
 
 static void
@@ -690,7 +640,7 @@ action_new_window (GSimpleAction *action,
     home = g_file_new_for_path (g_get_home_dir ());
 
     nautilus_application_open_location_full (application, home,
-                                             NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW,
+                                             NAUTILUS_OPEN_FLAG_NEW_WINDOW,
                                              NULL, NULL, NULL);
 }
 
@@ -729,10 +679,11 @@ action_clone_window (GSimpleAction *action,
         {
             location = nautilus_window_slot_get_pending_location (active_slot);
         }
+        g_object_ref (location);
     }
 
     nautilus_application_open_location_full (NAUTILUS_APPLICATION (application), location,
-                                             NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW, NULL, NULL, NULL);
+                                             NAUTILUS_OPEN_FLAG_NEW_WINDOW, NULL, NULL, NULL);
 }
 
 static void
@@ -741,7 +692,23 @@ action_preferences (GSimpleAction *action,
                     gpointer       user_data)
 {
     GtkApplication *application = user_data;
-    nautilus_preferences_window_show (gtk_application_get_active_window (application));
+    GtkWidget *active_window = GTK_WIDGET (gtk_application_get_active_window (application));
+    nautilus_preferences_dialog_show (active_window);
+}
+
+static void
+action_search_settings (GSimpleAction *action,
+                        GVariant      *parameter,
+                        gpointer       user_data)
+{
+    GtkApplication *self = user_data;
+    const char *parameters = "('launch-panel', [<('search', [<'locations'>])>], @a{sv} {})";
+
+    nautilus_dbus_launcher_call (nautilus_dbus_launcher_get (),
+                                 NAUTILUS_DBUS_LAUNCHER_SETTINGS,
+                                 "Activate",
+                                 g_variant_new_parsed (parameters),
+                                 gtk_application_get_active_window (self));
 }
 
 static void
@@ -765,23 +732,19 @@ action_help (GSimpleAction *action,
     GError *error = NULL;
 
     window = gtk_application_get_active_window (application);
-    gtk_show_uri_on_window (window, "help:gnome-help/files",
-                            gtk_get_current_event_time (), &error);
+    gtk_show_uri (window, "help:gnome-help/files", GDK_CURRENT_TIME);
 
     if (error)
     {
-        dialog = gtk_message_dialog_new (window ? GTK_WINDOW (window) : NULL,
-                                         GTK_DIALOG_MODAL,
-                                         GTK_MESSAGE_ERROR,
-                                         GTK_BUTTONS_OK,
-                                         _("There was an error displaying help: \n%s"),
-                                         error->message);
-        g_signal_connect (G_OBJECT (dialog), "response",
-                          G_CALLBACK (gtk_widget_destroy),
-                          NULL);
+        dialog = adw_message_dialog_new (window ? GTK_WINDOW (window) : NULL,
+                                         NULL, NULL);
+        adw_message_dialog_format_heading (ADW_MESSAGE_DIALOG (dialog),
+                                           _("There was an error displaying help: \n%s"),
+                                           error->message);
+        adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog), "ok", _("_OK"));
+        adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "ok");
 
-        gtk_window_set_resizable (GTK_WINDOW (dialog), FALSE);
-        gtk_widget_show (dialog);
+        gtk_window_present (GTK_WINDOW (dialog));
         g_error_free (error);
     }
 }
@@ -791,7 +754,7 @@ action_kill (GSimpleAction *action,
              GVariant      *parameter,
              gpointer       user_data)
 {
-    GtkApplication *application = user_data;
+    AdwApplication *application = user_data;
 
     /* we have been asked to force quit */
     g_application_quit (G_APPLICATION (application));
@@ -817,94 +780,25 @@ action_quit (GSimpleAction *action,
     g_list_free (windows);
 }
 
-static void
-action_show_hide_sidebar (GObject    *object,
-                          GParamSpec *pspec,
-                          gpointer   *user_data)
+static const GActionEntry app_entries[] =
 {
-    GList *window, *windows;
-    GVariant *state = g_action_get_state (G_ACTION (object));
-
-    windows = gtk_application_get_windows (GTK_APPLICATION (user_data));
-
-    for (window = windows; window != NULL; window = window->next)
-    {
-        if (g_variant_get_boolean (state))
-        {
-            nautilus_window_show_sidebar (window->data);
-        }
-        else
-        {
-            nautilus_window_hide_sidebar (window->data);
-        }
-    }
-}
-
-static void
-action_show_help_overlay (GSimpleAction *action,
-                          GVariant      *state,
-                          gpointer       user_data)
-{
-    GtkApplication *application = user_data;
-    GtkWindow *window = gtk_application_get_active_window (application);
-
-    g_action_group_activate_action (G_ACTION_GROUP (window), "show-help-overlay", NULL);
-}
-
-static gboolean
-variant_get_mapping (GValue   *value,
-                     GVariant *variant,
-                     gpointer  user_data)
-{
-    g_value_set_variant (value, variant);
-    return TRUE;
-}
-
-static GVariant *
-variant_set_mapping (const GValue       *value,
-                     const GVariantType *expected_type,
-                     gpointer            user_data)
-{
-    return g_value_get_variant (value);
-}
-
-const static GActionEntry app_entries[] =
-{
-    { "new-window", action_new_window, NULL, NULL, NULL },
-    { "clone-window", action_clone_window, NULL, NULL, NULL },
-    { "preferences", action_preferences, NULL, NULL, NULL },
-    { "show-hide-sidebar", NULL, NULL, "true", NULL },
-    { "about", action_about, NULL, NULL, NULL },
-    { "help", action_help, NULL, NULL, NULL },
-    { "quit", action_quit, NULL, NULL, NULL },
-    { "kill", action_kill, NULL, NULL, NULL },
-    { "show-help-overlay", action_show_help_overlay, NULL, NULL, NULL },
+    { .name = "new-window", .activate = action_new_window },
+    { .name = "clone-window", .activate = action_clone_window },
+    { .name = "preferences", .activate = action_preferences },
+    { .name = "search-settings", .activate = action_search_settings },
+    { .name = "about", .activate = action_about },
+    { .name = "help", .activate = action_help },
+    { .name = "quit", .activate = action_quit },
+    { .name = "kill", .activate = action_kill },
 };
 
 static void
 nautilus_init_application_actions (NautilusApplication *app)
 {
-    GAction *sidebar_action;
-
     g_action_map_add_action_entries (G_ACTION_MAP (app),
                                      app_entries, G_N_ELEMENTS (app_entries),
                                      app);
 
-
-    sidebar_action = g_action_map_lookup_action (G_ACTION_MAP (app),
-                                                 "show-hide-sidebar");
-    g_signal_connect (sidebar_action,
-                      "notify::state",
-                      G_CALLBACK (action_show_hide_sidebar),
-                      app);
-    g_settings_bind_with_mapping (nautilus_window_state,
-                                  NAUTILUS_WINDOW_STATE_START_WITH_SIDEBAR,
-                                  sidebar_action,
-                                  "state",
-                                  G_SETTINGS_BIND_DEFAULT,
-                                  variant_get_mapping,
-                                  variant_set_mapping,
-                                  NULL, NULL);
 
     nautilus_application_set_accelerator (G_APPLICATION (app),
                                           "app.clone-window", "<Primary>n");
@@ -913,7 +807,7 @@ nautilus_init_application_actions (NautilusApplication *app)
     nautilus_application_set_accelerator (G_APPLICATION (app),
                                           "app.quit", "<Primary>q");
     nautilus_application_set_accelerator (G_APPLICATION (app),
-                                          "app.show-hide-sidebar", "F9");
+                                          "app.preferences", "<Primary>comma");
 }
 
 static void
@@ -921,7 +815,7 @@ nautilus_application_activate (GApplication *app)
 {
     GFile **files;
 
-    DEBUG ("Calling activate");
+    g_debug ("Calling activate");
 
     files = g_malloc0 (2 * sizeof (GFile *));
     files[0] = g_file_new_for_path (g_get_home_dir ());
@@ -963,12 +857,12 @@ nautilus_application_handle_file_args (NautilusApplication *self,
                 g_free (cwd);
             }
 
-            if (nautilus_is_search_directory (file))
+            if (g_file_has_uri_scheme (file, SCHEME_SEARCH))
             {
                 g_autofree char *error_string = NULL;
                 error_string = g_strdup_printf (_("“%s” is an internal protocol. "
                                                   "Opening this location directly is not supported."),
-                                                EEL_SEARCH_URI);
+                                                SCHEME_SEARCH ":");
 
                 g_printerr ("%s\n", error_string);
             }
@@ -1019,8 +913,6 @@ nautilus_application_command_line (GApplication            *application,
     gint retval = -1;
     GVariantDict *options;
 
-    nautilus_profile_start (NULL);
-
     options = g_application_command_line_get_options_dict (command_line);
 
     if (g_variant_dict_contains (options, "version"))
@@ -1037,15 +929,9 @@ nautilus_application_command_line (GApplication            *application,
         goto out;
     }
 
-    if (g_variant_dict_contains (options, "check"))
-    {
-        retval = do_perform_self_checks ();
-        goto out;
-    }
-
     if (g_variant_dict_contains (options, "quit"))
     {
-        DEBUG ("Killing application, as requested");
+        g_debug ("Killing app, as requested");
         g_action_group_activate_action (G_ACTION_GROUP (application),
                                         "kill", NULL);
         goto out;
@@ -1054,8 +940,6 @@ nautilus_application_command_line (GApplication            *application,
     retval = nautilus_application_handle_file_args (self, options);
 
 out:
-    nautilus_profile_end (NULL);
-
     return retval;
 }
 
@@ -1064,31 +948,43 @@ nautilus_application_init (NautilusApplication *self)
 {
     static const GOptionEntry options[] =
     {
-#ifndef NAUTILUS_OMIT_SELF_CHECK
-        { "check", 'c', 0, G_OPTION_ARG_NONE, NULL,
-          N_("Perform a quick set of self-check tests."), NULL },
-#endif
-        { "version", '\0', 0, G_OPTION_ARG_NONE, NULL,
-          N_("Show the version of the program."), NULL },
-        { "new-window", 'w', 0, G_OPTION_ARG_NONE, NULL,
-          N_("Always open a new window for browsing specified URIs"), NULL },
-        { "quit", 'q', 0, G_OPTION_ARG_NONE, NULL,
-          N_("Quit Nautilus."), NULL },
-        { "select", 's', 0, G_OPTION_ARG_NONE, NULL,
-          N_("Select specified URI in parent folder."), NULL },
+        {
+            "version", '\0', 0, G_OPTION_ARG_NONE, NULL,
+            N_("Show the version of the program."), NULL
+        },
+        {
+            "new-window", 'w', 0, G_OPTION_ARG_NONE, NULL,
+            N_("Always open a new window for browsing specified URIs"), NULL
+        },
+        {
+            "quit", 'q', 0, G_OPTION_ARG_NONE, NULL,
+            N_("Quit Nautilus."), NULL
+        },
+        {
+            "select", 's', 0, G_OPTION_ARG_NONE, NULL,
+            N_("Select specified URI in parent folder."), NULL
+        },
         { G_OPTION_REMAINING, 0, 0, G_OPTION_ARG_STRING_ARRAY, NULL, NULL, N_("[URI…]") },
 
         /* The following are old options which have no effect anymore. We keep
          * them around for compatibility reasons, e.g. not breaking old scripts.
          */
-        { "browser", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
-          NULL, NULL },
-        { "geometry", 'g', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING, NULL,
-          NULL, NULL },
-        { "no-default-window", 'n', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
-          NULL, NULL },
-        { "no-desktop", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
-          NULL, NULL },
+        {
+            "browser", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
+            NULL, NULL
+        },
+        {
+            "geometry", 'g', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING, NULL,
+            NULL, NULL
+        },
+        {
+            "no-default-window", 'n', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
+            NULL, NULL
+        },
+        {
+            "no-desktop", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, NULL,
+            NULL, NULL
+        },
 
         { NULL }
     };
@@ -1102,83 +998,18 @@ nautilus_application_init (NautilusApplication *self)
                                                  NULL);
 
     priv->undo_manager = nautilus_file_undo_manager_new ();
+    priv->tag_manager = nautilus_tag_manager_new ();
 
-    priv->tag_manager_cancellable = g_cancellable_new ();
-    priv->tag_manager = nautilus_tag_manager_get ();
-    nautilus_tag_manager_set_cancellable (priv->tag_manager,
-                                          priv->tag_manager_cancellable);
+    priv->dbus_launcher = nautilus_dbus_launcher_new ();
+
+    nautilus_tracker_setup_miner_fs_connection ();
 
     g_application_add_main_option_entries (G_APPLICATION (self), options);
 
     nautilus_ensure_extension_points ();
     nautilus_ensure_extension_builtins ();
-}
 
-static void
-theme_changed (GtkSettings *settings)
-{
-    static GtkCssProvider *provider = NULL;
-    static GtkCssProvider *permanent_provider = NULL;
-    gchar *theme;
-    GdkScreen *screen;
-    GFile *file;
-
-    g_object_get (settings, "gtk-theme-name", &theme, NULL);
-    screen = gdk_screen_get_default ();
-
-    /* CSS that themes can override */
-    if (g_str_equal (theme, "Adwaita") || g_str_equal (theme, "Adwaita-dark"))
-    {
-        if (provider == NULL)
-        {
-            provider = gtk_css_provider_new ();
-            file = g_file_new_for_uri ("resource:///org/gnome/nautilus/css/Adwaita.css");
-            gtk_css_provider_load_from_file (provider, file, NULL);
-            g_object_unref (file);
-        }
-
-        gtk_style_context_add_provider_for_screen (screen,
-                                                   GTK_STYLE_PROVIDER (provider),
-                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    }
-    else if (provider != NULL)
-    {
-        gtk_style_context_remove_provider_for_screen (screen,
-                                                      GTK_STYLE_PROVIDER (provider));
-        g_clear_object (&provider);
-    }
-
-    /* CSS we want to always load for any theme */
-    if (permanent_provider == NULL)
-    {
-        permanent_provider = gtk_css_provider_new ();
-        file = g_file_new_for_uri ("resource:///org/gnome/nautilus/css/nautilus.css");
-        gtk_css_provider_load_from_file (permanent_provider, file, NULL);
-        /* The behavior of two style providers with the same priority is
-         * undefined and gtk happens to prefer the provider that got added last.
-         * Use a higher priority here to avoid this problem.
-         */
-        gtk_style_context_add_provider_for_screen (screen,
-                                                   GTK_STYLE_PROVIDER (permanent_provider),
-                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
-        g_object_unref (file);
-    }
-
-    g_free (theme);
-}
-
-static void
-setup_theme_extensions (void)
-{
-    GtkSettings *settings;
-
-    /* Set up a handler to load our custom css for Adwaita.
-     * See https://bugzilla.gnome.org/show_bug.cgi?id=732959
-     * for a more automatic solution that is still under discussion.
-     */
-    settings = gtk_settings_get_default ();
-    g_signal_connect (settings, "notify::gtk-theme-name", G_CALLBACK (theme_changed), NULL);
-    theme_changed (settings);
+    nautilus_clipboard_register ();
 }
 
 NautilusApplication *
@@ -1258,34 +1089,73 @@ icon_theme_changed_callback (GtkIconTheme *icon_theme,
     emit_change_signals_for_all_files_in_all_directories ();
 }
 
-void
-nautilus_application_startup_common (NautilusApplication *self)
+static void
+maybe_migrate_gtk_filechooser_preferences (void)
 {
-    NautilusApplicationPrivate *priv;
+    if (!g_settings_get_boolean (nautilus_preferences, NAUTILUS_PREFERENCES_MIGRATED_GTK_SETTINGS))
+    {
+        g_autoptr (GSettingsSchema) schema = NULL;
 
-    nautilus_profile_start (NULL);
-    priv = nautilus_application_get_instance_private (self);
+        /* We don't depend on GTK 3. Check whether its schema is installed. */
+        schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                                  "org.gtk.Settings.FileChooser",
+                                                  FALSE);
+        if (schema != NULL)
+        {
+            g_autoptr (GSettings) gtk3_settings = NULL;
+
+            gtk3_settings = g_settings_new_with_path ("org.gtk.Settings.FileChooser",
+                                                      "/org/gtk/settings/file-chooser/");
+            g_settings_set_boolean (gtk_filechooser_preferences,
+                                    NAUTILUS_PREFERENCES_SORT_DIRECTORIES_FIRST,
+                                    g_settings_get_boolean (gtk3_settings,
+                                                            NAUTILUS_PREFERENCES_SORT_DIRECTORIES_FIRST));
+            g_settings_set_boolean (gtk_filechooser_preferences,
+                                    NAUTILUS_PREFERENCES_SHOW_HIDDEN_FILES,
+                                    g_settings_get_boolean (gtk3_settings,
+                                                            NAUTILUS_PREFERENCES_SHOW_HIDDEN_FILES));
+        }
+        g_settings_set_boolean (nautilus_preferences,
+                                NAUTILUS_PREFERENCES_MIGRATED_GTK_SETTINGS,
+                                TRUE);
+    }
+}
+
+static void
+nautilus_application_startup (GApplication *app)
+{
+    NautilusApplication *self = NAUTILUS_APPLICATION (app);
+    NautilusApplicationPrivate *priv = nautilus_application_get_instance_private (self);
 
     g_application_set_resource_base_path (G_APPLICATION (self), "/org/gnome/nautilus");
 
-    /* chain up to the GTK+ implementation early, so gtk_init()
+    /* Initialize GDK display (for wayland-x11-interop protocol) before GTK does
+     * it during the chain-up. */
+    g_autoptr (GError) error = NULL;
+    GdkDisplay *display = init_external_window_display (&error);
+    if (display == NULL || error != NULL)
+    {
+        g_message ("Failed to initialize display server connection: %s",
+                   error->message);
+    }
+
+    /* Chain up to the GtkApplication implementation early, so that gtk_init()
      * is called for us.
      */
     G_APPLICATION_CLASS (nautilus_application_parent_class)->startup (G_APPLICATION (self));
 
-    hdy_init ();
+    g_assert (display == NULL || gdk_display_get_default () == display);
 
     gtk_window_set_default_icon_name (APPLICATION_ID);
-
-    setup_theme_extensions ();
 
     /* initialize preferences and create the global GSettings objects */
     nautilus_global_preferences_init ();
 
+    /* initialize data preference watchers */
+    nautilus_date_setup_preferences ();
+
     /* initialize nautilus modules */
-    nautilus_profile_start ("Modules");
     nautilus_module_setup ();
-    nautilus_profile_end ("Modules");
 
     /* attach menu-provider module callback */
     menu_provider_init_callback ();
@@ -1300,32 +1170,18 @@ nautilus_application_startup_common (NautilusApplication *self)
 
     nautilus_init_application_actions (self);
 
-    nautilus_tag_manager_maybe_migrate_tracker2_data (priv->tag_manager);
-
-    nautilus_profile_end (NULL);
+    if (g_strcmp0 (g_getenv ("RUNNING_TESTS"), "TRUE") != 0)
+    {
+        maybe_migrate_gtk_filechooser_preferences ();
+        nautilus_tag_manager_maybe_migrate_tracker2_data (priv->tag_manager);
+    }
 
     g_signal_connect (self, "shutdown", G_CALLBACK (on_application_shutdown), NULL);
 
-    g_signal_connect_object (gtk_icon_theme_get_default (),
+    g_signal_connect_object (gtk_icon_theme_get_for_display (gdk_display_get_default ()),
                              "changed",
                              G_CALLBACK (icon_theme_changed_callback),
                              NULL, 0);
-}
-
-static void
-nautilus_application_startup (GApplication *app)
-{
-    NautilusApplication *self = NAUTILUS_APPLICATION (app);
-    NautilusApplicationPrivate *priv;
-
-    nautilus_profile_start (NULL);
-    priv = nautilus_application_get_instance_private (self);
-
-    /* create DBus manager */
-    priv->fdb_manager = nautilus_freedesktop_dbus_new ();
-    nautilus_application_startup_common (self);
-
-    nautilus_profile_end (NULL);
 }
 
 static gboolean
@@ -1344,13 +1200,28 @@ nautilus_application_dbus_register (GApplication     *app,
         return FALSE;
     }
 
+    priv->fdb_manager = nautilus_freedesktop_dbus_new ();
+    if (!nautilus_freedesktop_dbus_register (priv->fdb_manager, connection, error))
+    {
+        return FALSE;
+    }
+
+    if (g_strcmp0 (g_getenv ("RUNNING_TESTS"), "TRUE") != 0)
+    {
+        priv->portal_implementation = nautilus_portal_new ();
+        if (!nautilus_portal_register (priv->portal_implementation, connection, error))
+        {
+            return FALSE;
+        }
+    }
+
     priv->search_provider = nautilus_shell_search_provider_new ();
     if (!nautilus_shell_search_provider_register (priv->search_provider, connection, error))
     {
         return FALSE;
     }
 
-    priv->previewer_selection_id = nautilus_previewer_connect_selection_event (connection);
+    nautilus_previewer_setup ();
 
     return TRUE;
 }
@@ -1370,18 +1241,25 @@ nautilus_application_dbus_unregister (GApplication    *app,
         g_clear_object (&priv->dbus_manager);
     }
 
+    if (priv->fdb_manager)
+    {
+        nautilus_freedesktop_dbus_unregister (priv->fdb_manager);
+        g_clear_object (&priv->fdb_manager);
+    }
+
+    if (priv->portal_implementation != NULL)
+    {
+        nautilus_portal_unregister (priv->portal_implementation);
+        g_clear_object (&priv->portal_implementation);
+    }
+
     if (priv->search_provider)
     {
         nautilus_shell_search_provider_unregister (priv->search_provider);
         g_clear_object (&priv->search_provider);
     }
 
-    if (priv->previewer_selection_id != 0)
-    {
-        nautilus_previewer_disconnect_selection_event (connection,
-                                                       priv->previewer_selection_id);
-        priv->previewer_selection_id = 0;
-    }
+    nautilus_previewer_teardown (connection);
 }
 
 static void
@@ -1403,14 +1281,6 @@ update_dbus_opened_locations (NautilusApplication *self)
     g_return_if_fail (NAUTILUS_IS_APPLICATION (self));
 
     priv = nautilus_application_get_instance_private (self);
-
-    /* Children of nautilus application could not handle the dbus, so don't
-     * do anything in that case */
-    if (!priv->fdb_manager)
-    {
-        return;
-    }
-
     dbus_object_path = g_application_get_dbus_object_path (G_APPLICATION (self));
 
     g_return_if_fail (dbus_object_path);
@@ -1616,4 +1486,19 @@ nautilus_application_search (NautilusApplication *self,
     location = nautilus_query_get_location (query);
     window = open_window (self, location);
     nautilus_window_search (window, query);
+}
+
+gboolean
+nautilus_application_is_sandboxed (void)
+{
+    static gboolean ret;
+
+    static gsize init = 0;
+    if (g_once_init_enter (&init))
+    {
+        ret = g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS);
+        g_once_init_leave (&init, 1);
+    }
+
+    return ret;
 }

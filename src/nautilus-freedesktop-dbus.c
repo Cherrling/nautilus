@@ -17,12 +17,9 @@
  * Authors: Akshay Gupta <kitallis@gmail.com>
  *          Federico Mena Quintero <federico@gnome.org>
  */
+#define G_LOG_DOMAIN "nautilus-dbus"
 
 #include "nautilus-freedesktop-dbus.h"
-
-/* We share the same debug domain as nautilus-dbus-manager */
-#define DEBUG_FLAG NAUTILUS_DEBUG_DBUS
-#include "nautilus-debug.h"
 
 #include "nautilus-application.h"
 #include "nautilus-file.h"
@@ -40,11 +37,6 @@ struct _NautilusFreedesktopDBus
 
     /* Our DBus implementation skeleton */
     NautilusFreedesktopFileManager1 *skeleton;
-
-    GStrv pending_open_locations;
-    GVariant *pending_open_windows_with_locations;
-
-    gboolean name_lost;
 };
 
 G_DEFINE_TYPE (NautilusFreedesktopDBus, nautilus_freedesktop_dbus, G_TYPE_OBJECT);
@@ -144,50 +136,11 @@ skeleton_handle_show_item_properties_cb (NautilusFreedesktopFileManager1 *object
 }
 
 static void
-bus_acquired_cb (GDBusConnection *conn,
-                 const gchar     *name,
-                 gpointer         user_data)
-{
-    NautilusFreedesktopDBus *fdb = user_data;
-
-    DEBUG ("Bus acquired at %s", name);
-
-    fdb->skeleton = nautilus_freedesktop_file_manager1_skeleton_new ();
-
-    g_signal_connect (fdb->skeleton, "handle-show-items",
-                      G_CALLBACK (skeleton_handle_show_items_cb), fdb);
-    g_signal_connect (fdb->skeleton, "handle-show-folders",
-                      G_CALLBACK (skeleton_handle_show_folders_cb), fdb);
-    g_signal_connect (fdb->skeleton, "handle-show-item-properties",
-                      G_CALLBACK (skeleton_handle_show_item_properties_cb), fdb);
-
-    g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (fdb->skeleton), conn, NAUTILUS_FDO_DBUS_PATH, NULL);
-
-    if (G_UNLIKELY (fdb->pending_open_locations != NULL))
-    {
-        g_auto (GStrv) locations = NULL;
-
-        locations = g_steal_pointer (&fdb->pending_open_locations);
-
-        nautilus_freedesktop_dbus_set_open_locations (fdb, (const gchar **) locations);
-    }
-
-    if (G_UNLIKELY (fdb->pending_open_windows_with_locations != NULL))
-    {
-        g_autoptr (GVariant) locations = NULL;
-
-        locations = g_steal_pointer (&fdb->pending_open_windows_with_locations);
-
-        nautilus_freedesktop_dbus_set_open_windows_with_locations (fdb, locations);
-    }
-}
-
-static void
 name_acquired_cb (GDBusConnection *connection,
                   const gchar     *name,
                   gpointer         user_data)
 {
-    DEBUG ("Acquired the name %s on the session message bus\n", name);
+    g_debug ("Acquired the name %s on the session message bus", name);
 }
 
 static void
@@ -195,13 +148,7 @@ name_lost_cb (GDBusConnection *connection,
               const gchar     *name,
               gpointer         user_data)
 {
-    NautilusFreedesktopDBus *fdb;
-
-    DEBUG ("Lost (or failed to acquire) the name %s on the session message bus\n", name);
-
-    fdb = NAUTILUS_FREEDESKTOP_DBUS (user_data);
-
-    fdb->name_lost = TRUE;
+    g_debug ("Lost (or failed to acquire) the name %s on the session message bus", name);
 }
 
 static void
@@ -215,25 +162,9 @@ nautilus_freedesktop_dbus_dispose (GObject *object)
         fdb->owner_id = 0;
     }
 
-    if (fdb->skeleton != NULL)
-    {
-        g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (fdb->skeleton));
-        g_object_unref (fdb->skeleton);
-        fdb->skeleton = NULL;
-    }
+    g_clear_object (&fdb->skeleton);
 
     G_OBJECT_CLASS (nautilus_freedesktop_dbus_parent_class)->dispose (object);
-}
-
-static void
-nautilus_freedesktop_dbus_finalize (GObject *object)
-{
-    NautilusFreedesktopDBus *fdb;
-
-    fdb = NAUTILUS_FREEDESKTOP_DBUS (object);
-
-    g_clear_pointer (&fdb->pending_open_locations, g_strfreev);
-    g_clear_pointer (&fdb->pending_open_windows_with_locations, g_variant_unref);
 }
 
 static void
@@ -242,24 +173,12 @@ nautilus_freedesktop_dbus_class_init (NautilusFreedesktopDBusClass *klass)
     GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
     object_class->dispose = nautilus_freedesktop_dbus_dispose;
-    object_class->finalize = nautilus_freedesktop_dbus_finalize;
 }
 
 static void
 nautilus_freedesktop_dbus_init (NautilusFreedesktopDBus *fdb)
 {
-    fdb->owner_id = g_bus_own_name (G_BUS_TYPE_SESSION,
-                                    NAUTILUS_FDO_DBUS_NAME,
-                                    G_BUS_NAME_OWNER_FLAGS_NONE,
-                                    bus_acquired_cb,
-                                    name_acquired_cb,
-                                    name_lost_cb,
-                                    fdb,
-                                    NULL);
-    fdb->skeleton = NULL;
-    fdb->pending_open_locations = NULL;
-    fdb->pending_open_windows_with_locations = NULL;
-    fdb->name_lost = FALSE;
+    fdb->skeleton = nautilus_freedesktop_file_manager1_skeleton_new ();
 }
 
 void
@@ -268,21 +187,7 @@ nautilus_freedesktop_dbus_set_open_locations (NautilusFreedesktopDBus  *fdb,
 {
     g_return_if_fail (NAUTILUS_IS_FREEDESKTOP_DBUS (fdb));
 
-    if (G_UNLIKELY (fdb->skeleton == NULL))
-    {
-        if (G_LIKELY (fdb->name_lost))
-        {
-            return;
-        }
-
-        g_clear_pointer (&fdb->pending_open_locations, g_strfreev);
-
-        fdb->pending_open_locations = g_strdupv ((gchar **) locations);
-    }
-    else
-    {
-        nautilus_freedesktop_file_manager1_set_open_locations (fdb->skeleton, locations);
-    }
+    nautilus_freedesktop_file_manager1_set_open_locations (fdb->skeleton, locations);
 }
 
 /**
@@ -301,27 +206,60 @@ nautilus_freedesktop_dbus_set_open_windows_with_locations (NautilusFreedesktopDB
 {
     g_return_if_fail (NAUTILUS_IS_FREEDESKTOP_DBUS (fdb));
 
-    if (G_UNLIKELY (fdb->skeleton == NULL))
-    {
-        if (G_LIKELY (fdb->name_lost))
-        {
-            return;
-        }
-
-        g_clear_pointer (&fdb->pending_open_windows_with_locations, g_variant_unref);
-
-        fdb->pending_open_windows_with_locations = g_variant_ref (locations);
-    }
-    else
-    {
-        nautilus_freedesktop_file_manager1_set_open_windows_with_locations (fdb->skeleton,
-                                                                            locations);
-    }
+    nautilus_freedesktop_file_manager1_set_open_windows_with_locations (fdb->skeleton,
+                                                                        locations);
 }
 
-/* Tries to own the org.freedesktop.FileManager1 service name */
 NautilusFreedesktopDBus *
 nautilus_freedesktop_dbus_new (void)
 {
     return g_object_new (NAUTILUS_TYPE_FREEDESKTOP_DBUS, NULL);
+}
+
+/* Tries to own the org.freedesktop.FileManager1 service name */
+gboolean
+nautilus_freedesktop_dbus_register (NautilusFreedesktopDBus  *fdb,
+                                    GDBusConnection          *connection,
+                                    GError                  **error)
+{
+    gboolean success;
+
+    success = g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (fdb->skeleton),
+                                                connection,
+                                                NAUTILUS_FDO_DBUS_PATH,
+                                                error);
+
+    if (success)
+    {
+        g_signal_connect (fdb->skeleton, "handle-show-items",
+                          G_CALLBACK (skeleton_handle_show_items_cb), fdb);
+        g_signal_connect (fdb->skeleton, "handle-show-folders",
+                          G_CALLBACK (skeleton_handle_show_folders_cb), fdb);
+        g_signal_connect (fdb->skeleton, "handle-show-item-properties",
+                          G_CALLBACK (skeleton_handle_show_item_properties_cb), fdb);
+    }
+
+    fdb->owner_id = g_bus_own_name_on_connection (connection,
+                                                  NAUTILUS_FDO_DBUS_NAME,
+                                                  G_BUS_NAME_OWNER_FLAGS_NONE,
+                                                  name_acquired_cb,
+                                                  name_lost_cb,
+                                                  fdb,
+                                                  NULL);
+
+    return success;
+}
+
+void
+nautilus_freedesktop_dbus_unregister (NautilusFreedesktopDBus *fdb)
+{
+    if (fdb->owner_id != 0)
+    {
+        g_bus_unown_name (fdb->owner_id);
+        fdb->owner_id = 0;
+    }
+
+    g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (fdb->skeleton));
+
+    g_signal_handlers_disconnect_by_data (fdb->skeleton, fdb);
 }

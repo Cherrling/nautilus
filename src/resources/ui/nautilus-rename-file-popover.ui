@@ -1,86 +1,65 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Generated with glade 3.22.0 -->
 <interface>
-  <requires lib="gtk+" version="3.20"/>
-  <object class="GtkPopover" id="rename_file_popover">
-    <property name="can_focus">False</property>
-    <property name="position">bottom</property>
-    <child>
-      <object class="GtkGrid">
-        <property name="visible">True</property>
-        <property name="can_focus">False</property>
-        <property name="margin_start">10</property>
-        <property name="margin_end">10</property>
-        <property name="margin_top">10</property>
-        <property name="margin_bottom">10</property>
-        <property name="row_spacing">6</property>
-        <property name="column_spacing">6</property>
+  <requires lib="gtk" version="4.0"/>
+  <template class="NautilusRenameFilePopover" parent="GtkPopover">
+    <signal name="closed" handler="on_closed"/>
+    <property name="child">
+      <object class="GtkBox">
+        <property name="margin-start">18</property>
+        <property name="margin-end">18</property>
+        <property name="margin-top">18</property>
+        <property name="margin-bottom">18</property>
+        <property name="orientation">vertical</property>
         <child>
-          <object class="GtkLabel" id="name_label">
-            <property name="visible">True</property>
-            <property name="can_focus">False</property>
-            <property name="halign">start</property>
-            <property name="label" translatable="yes">Name</property>
-            <property name="mnemonic_widget">name_entry</property>
-            <attributes>
-              <attribute name="weight" value="bold"/>
-            </attributes>
+          <object class="GtkLabel" id="title_label">
+            <property name="margin-bottom">12</property>
+            <style>
+              <class name="title-2"/>
+            </style>
           </object>
-          <packing>
-            <property name="left_attach">0</property>
-            <property name="top_attach">0</property>
-            <property name="width">2</property>
-          </packing>
         </child>
         <child>
           <object class="GtkEntry" id="name_entry">
-            <property name="visible">True</property>
-            <property name="can_focus">True</property>
-            <property name="can_default">True</property>
+            <accessibility>
+              <property name="label" translatable="yes">New Filename</property>
+            </accessibility>
+            <property name="margin-bottom">12</property>
+            <signal name="changed" handler="nautilus_filename_validator_validate" object="validator" swapped="yes"/>
+            <signal name="activate" handler="nautilus_filename_validator_try_accept" object="validator" swapped="yes"/>
           </object>
-          <packing>
-            <property name="left_attach">0</property>
-            <property name="top_attach">1</property>
-          </packing>
         </child>
         <child>
-          <object class="GtkButton" id="rename_button">
+          <object class="GtkRevealer">
+            <property name="reveal-child" bind-source="validator" bind-property="has-feedback"/>
+            <property name="child">
+              <object class="GtkLabel">
+                <property name="label" bind-source="validator" bind-property="feedback-text"/>
+                <property name="margin-bottom">12</property>
+                <property name="max-width-chars">0</property>
+                <property name="wrap">True</property>
+                <property name="xalign">0</property>
+              </object>
+            </property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkButton">
             <property name="label" translatable="yes">_Rename</property>
-            <property name="visible">True</property>
-            <property name="sensitive">False</property>
-            <property name="can_focus">False</property>
-            <property name="receives_default">False</property>
-            <property name="use_underline">True</property>
+            <property name="sensitive" bind-source="validator" bind-property="passed" bind-flags="sync-create"/>
+            <property name="halign">end</property>
+            <property name="use-underline">True</property>
+            <signal name="clicked" handler="nautilus_filename_validator_try_accept" object="validator" swapped="yes"/>"
             <style>
               <class name="suggested-action"/>
             </style>
           </object>
-          <packing>
-            <property name="left_attach">1</property>
-            <property name="top_attach">1</property>
-          </packing>
-        </child>
-        <child>
-          <object class="GtkRevealer" id="error_revealer">
-            <property name="visible">True</property>
-            <property name="can_focus">False</property>
-            <child>
-              <object class="GtkLabel" id="error_label">
-                <property name="visible">True</property>
-                <property name="can_focus">False</property>
-                <property name="margin_top">4</property>
-                <property name="margin_bottom">4</property>
-                <property name="xalign">0</property>
-              </object>
-            </child>
-          </object>
-          <packing>
-            <property name="left_attach">0</property>
-            <property name="top_attach">2</property>
-            <property name="width">2</property>
-          </packing>
         </child>
       </object>
-    </child>
+    </property>
+  </template>
+  <object class="NautilusFilenameValidator" id="validator">
+    <property name="new-name" bind-source="name_entry" bind-property="text"/>
+    <signal name="name-accepted" handler="on_name_accepted" swapped="yes"/>
   </object>
 </interface>
+

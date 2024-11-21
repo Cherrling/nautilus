@@ -28,169 +28,18 @@
 #include "nautilus-files-view-dnd.h"
 
 #include "nautilus-files-view.h"
-#include "nautilus-application.h"
-
-#include <eel/eel-string.h>
-#include <eel/eel-vfs-extensions.h>
 
 #include <glib/gi18n.h>
 
 #include "nautilus-clipboard.h"
 #include "nautilus-dnd.h"
-#include "nautilus-global-preferences.h"
 #include "nautilus-ui-utilities.h"
 
 #define GET_ANCESTOR(obj) \
-    GTK_WINDOW (gtk_widget_get_ancestor (GTK_WIDGET (obj), GTK_TYPE_WINDOW))
+        GTK_WINDOW (gtk_widget_get_ancestor (GTK_WIDGET (obj), GTK_TYPE_WINDOW))
 
-void
-nautilus_files_view_handle_netscape_url_drop (NautilusFilesView *view,
-                                              const char        *encoded_url,
-                                              const char        *target_uri,
-                                              GdkDragAction      action)
-{
-    char *url;
-    char **bits;
-    GList *uri_list = NULL;
-    GFile *f;
-
-    f = g_file_new_for_uri (target_uri);
-
-    if (!g_file_is_native (f))
-    {
-        show_dialog (_("Drag and drop is not supported."),
-                     _("Drag and drop is only supported on local file systems."),
-                     GET_ANCESTOR (view),
-                     GTK_MESSAGE_WARNING);
-        g_object_unref (f);
-        return;
-    }
-
-    g_object_unref (f);
-
-    /* _NETSCAPE_URL_ works like this: $URL\n$TITLE */
-    bits = g_strsplit (encoded_url, "\n", 0);
-    switch (g_strv_length (bits))
-    {
-        case 0:
-        {
-            g_strfreev (bits);
-            return;
-        }
-
-        default:
-        {
-            url = bits[0];
-        }
-    }
-
-    f = g_file_new_for_uri (url);
-
-    /* We don't support GDK_ACTION_ASK or GDK_ACTION_PRIVATE
-     * and we don't support combinations either. */
-    if ((action != GDK_ACTION_DEFAULT) &&
-        (action != GDK_ACTION_COPY) &&
-        (action != GDK_ACTION_MOVE))
-    {
-        show_dialog (_("Drag and drop is not supported."),
-                     _("An invalid drag type was used."),
-                     GET_ANCESTOR (view),
-                     GTK_MESSAGE_WARNING);
-        return;
-    }
-
-    uri_list = g_list_append (uri_list, url);
-
-    nautilus_files_view_move_copy_items (view, uri_list,
-                                         target_uri,
-                                         action);
-
-    g_list_free (uri_list);
-
-    g_object_unref (f);
-    g_strfreev (bits);
-}
-
-void
-nautilus_files_view_handle_uri_list_drop (NautilusFilesView *view,
-                                          const char        *item_uris,
-                                          const char        *target_uri,
-                                          GdkDragAction      action)
-{
-    gchar **uri_list;
-    GList *real_uri_list = NULL;
-    char *container_uri;
-    const char *real_target_uri;
-    int n_uris, i;
-
-    if (item_uris == NULL)
-    {
-        return;
-    }
-
-    container_uri = NULL;
-    if (target_uri == NULL)
-    {
-        container_uri = nautilus_files_view_get_backing_uri (view);
-        g_assert (container_uri != NULL);
-    }
-
-    if (action == GDK_ACTION_ASK)
-    {
-        action = nautilus_drag_drop_action_ask
-                     (GTK_WIDGET (view),
-                     GDK_ACTION_MOVE | GDK_ACTION_COPY | GDK_ACTION_LINK);
-        if (action == 0)
-        {
-            g_free (container_uri);
-            return;
-        }
-    }
-
-    /* We don't support GDK_ACTION_ASK or GDK_ACTION_PRIVATE
-     * and we don't support combinations either. */
-    if ((action != GDK_ACTION_DEFAULT) &&
-        (action != GDK_ACTION_COPY) &&
-        (action != GDK_ACTION_MOVE) &&
-        (action != GDK_ACTION_LINK))
-    {
-        show_dialog (_("Drag and drop is not supported."),
-                     _("An invalid drag type was used."),
-                     GET_ANCESTOR (view),
-                     GTK_MESSAGE_WARNING);
-        g_free (container_uri);
-        return;
-    }
-
-    n_uris = 0;
-    uri_list = g_uri_list_extract_uris (item_uris);
-    for (i = 0; uri_list[i] != NULL; i++)
-    {
-        real_uri_list = g_list_append (real_uri_list, uri_list[i]);
-        n_uris++;
-    }
-    g_free (uri_list);
-
-    /* do nothing if no real uris are left */
-    if (n_uris == 0)
-    {
-        g_free (container_uri);
-        return;
-    }
-
-    real_target_uri = target_uri != NULL ? target_uri : container_uri;
-
-    nautilus_files_view_move_copy_items (view, real_uri_list,
-                                         real_target_uri,
-                                         action);
-
-    g_list_free_full (real_uri_list, g_free);
-
-    g_free (container_uri);
-}
-
-#define MAX_LEN_FILENAME 128
-#define MIN_LEN_FILENAME 10
+#define MAX_LEN_FILENAME 64
+#define MIN_LEN_FILENAME 8
 
 static char *
 get_drop_filename (const char *text)
@@ -199,8 +48,9 @@ get_drop_filename (const char *text)
     char trimmed[MAX_LEN_FILENAME];
     int i;
     int last_word = -1;
-    int last_sentence = -1;
+    int end_sentence = -1;
     int last_nonspace = -1;
+    int start_sentence = -1;
     int num_attrs;
     PangoLogAttr *attrs;
     gchar *current_char;
@@ -213,35 +63,39 @@ get_drop_filename (const char *text)
     /* since the end of the text will always match a word boundary don't include it */
     for (i = 0; (i < num_attrs - 1); i++)
     {
+        if (attrs[i].is_sentence_start && start_sentence == -1)
+        {
+            start_sentence = i;
+        }
         if (!attrs[i].is_white)
         {
             last_nonspace = i;
-        }
-        if (attrs[i].is_sentence_end)
-        {
-            last_sentence = last_nonspace;
         }
         if (attrs[i].is_word_boundary)
         {
             last_word = last_nonspace;
         }
+        if (attrs[i].is_sentence_end)
+        {
+            end_sentence = last_nonspace;
+            break;
+        }
     }
     g_free (attrs);
 
-    if (last_sentence > 0)
+    if (end_sentence > 0)
     {
-        i = last_sentence;
+        i = end_sentence;
     }
     else
     {
         i = last_word;
     }
 
-    if (i > MIN_LEN_FILENAME)
+    if (i - start_sentence > MIN_LEN_FILENAME)
     {
-        char basename[MAX_LEN_FILENAME];
-        g_utf8_strncpy (basename, trimmed, i);
-        filename = g_strdup_printf ("%s.txt", basename);
+        g_autofree char *substring = g_utf8_substring (trimmed, start_sentence, i);
+        filename = g_strdup_printf ("%s.txt", substring);
     }
     else
     {
@@ -269,7 +123,7 @@ nautilus_files_view_handle_text_drop (NautilusFilesView *view,
                                       const char        *target_uri,
                                       GdkDragAction      action)
 {
-    int length;
+    gsize length;
     char *container_uri;
     char *filename;
 
@@ -302,115 +156,41 @@ nautilus_files_view_handle_text_drop (NautilusFilesView *view,
 }
 
 void
-nautilus_files_view_handle_raw_drop (NautilusFilesView *view,
-                                     const char        *raw_data,
-                                     int                length,
-                                     const char        *target_uri,
-                                     const char        *direct_save_uri,
-                                     GdkDragAction      action)
-{
-    char *container_uri, *filename;
-    GFile *direct_save_full;
-
-    if (raw_data == NULL)
-    {
-        return;
-    }
-
-    g_return_if_fail (action == GDK_ACTION_COPY);
-
-    container_uri = NULL;
-    if (target_uri == NULL)
-    {
-        container_uri = nautilus_files_view_get_backing_uri (view);
-        g_assert (container_uri != NULL);
-    }
-
-    filename = NULL;
-    if (direct_save_uri != NULL)
-    {
-        direct_save_full = g_file_new_for_uri (direct_save_uri);
-        filename = g_file_get_basename (direct_save_full);
-    }
-    if (filename == NULL)
-    {
-        /* Translator: This is the filename used for when you dnd raw
-         * data to a directory, if the source didn't supply a name.
-         */
-        filename = g_strdup (_("dropped data"));
-    }
-
-    nautilus_files_view_new_file_with_initial_contents (
-        view, target_uri != NULL ? target_uri : container_uri,
-        filename, raw_data, length);
-
-    g_free (container_uri);
-    g_free (filename);
-}
-
-void
 nautilus_files_view_drop_proxy_received_uris (NautilusFilesView *view,
                                               const GList       *source_uri_list,
                                               const char        *target_uri,
                                               GdkDragAction      action)
 {
-    char *container_uri;
+    g_autofree char *container_uri = NULL;
+    g_autoptr (GFile) source_location = g_file_new_for_uri (source_uri_list->data);
+    g_autoptr (GFile) target_location = g_file_new_for_uri (target_uri);
 
-    container_uri = NULL;
     if (target_uri == NULL)
     {
         container_uri = nautilus_files_view_get_backing_uri (view);
         g_assert (container_uri != NULL);
     }
-
-    if (action == GDK_ACTION_ASK)
+    if (g_file_has_parent (source_location, target_location) &&
+        action & GDK_ACTION_MOVE)
     {
-        action = nautilus_drag_drop_action_ask
-                     (GTK_WIDGET (view),
-                     GDK_ACTION_MOVE | GDK_ACTION_COPY | GDK_ACTION_LINK);
-        if (action == 0)
-        {
-            return;
-        }
+        /* By default dragging to the same directory is allowed so that
+         * users can duplicate a file using the CTRL modifier key.  Prevent
+         * an accidental MOVE, by rejecting what would be an error anyways. */
+        return;
     }
 
-    nautilus_clipboard_clear_if_colliding_uris (GTK_WIDGET (view),
-                                                source_uri_list);
+    if ((action != GDK_ACTION_COPY) &&
+        (action != GDK_ACTION_MOVE) &&
+        (action != GDK_ACTION_LINK))
+    {
+        show_dialog (_("Drag and drop is not supported."),
+                     _("An invalid drag type was used."),
+                     GET_ANCESTOR (view),
+                     GTK_MESSAGE_WARNING);
+        return;
+    }
 
     nautilus_files_view_move_copy_items (view, source_uri_list,
                                          target_uri != NULL ? target_uri : container_uri,
                                          action);
-
-    g_free (container_uri);
-}
-
-void
-nautilus_files_view_handle_hover (NautilusFilesView *view,
-                                  const char        *target_uri)
-{
-    NautilusWindowSlot *slot;
-    GFile *location;
-    GFile *current_location;
-    NautilusFile *target_file;
-    gboolean target_is_dir;
-    gboolean open_folder_on_hover;
-
-    slot = nautilus_files_view_get_nautilus_window_slot (view);
-
-    location = g_file_new_for_uri (target_uri);
-    target_file = nautilus_file_get_existing (location);
-    target_is_dir = nautilus_file_get_file_type (target_file) == G_FILE_TYPE_DIRECTORY;
-    current_location = nautilus_window_slot_get_location (slot);
-    open_folder_on_hover = g_settings_get_boolean (nautilus_preferences,
-                                                   NAUTILUS_PREFERENCES_OPEN_FOLDER_ON_DND_HOVER);
-
-    if (target_is_dir && open_folder_on_hover &&
-        !(current_location != NULL && g_file_equal (location, current_location)))
-    {
-        nautilus_application_open_location_full (NAUTILUS_APPLICATION (g_application_get_default ()),
-                                                 location, NAUTILUS_WINDOW_OPEN_FLAG_DONT_MAKE_ACTIVE,
-                                                 NULL, NULL, slot);
-    }
-    g_object_unref (location);
-    nautilus_file_unref (target_file);
 }

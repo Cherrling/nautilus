@@ -19,13 +19,13 @@
 #include "nautilus-batch-rename-dialog.h"
 #include "nautilus-batch-rename-utilities.h"
 #include "nautilus-file.h"
+#include "nautilus-filename-utilities.h"
 #include "nautilus-tracker-utilities.h"
 
 #include <glib.h>
 #include <gtk/gtk.h>
 #include <string.h>
 #include <stdarg.h>
-#include <eel/eel-vfs-extensions.h>
 
 typedef struct
 {
@@ -188,10 +188,10 @@ batch_rename_sort_lists_for_rename (GList    **selection,
              new_names_list != NULL && files != NULL;
              new_names_list = new_names_list->next, files = files->next)
         {
-            g_autofree gchar *old_file_name = NULL;
+            g_autoptr (NautilusFile) parent = NULL;
 
-            old_file_name = nautilus_file_get_name (NAUTILUS_FILE (files->data));
             new_file_name = new_names_list->data;
+            parent = nautilus_file_get_parent (NAUTILUS_FILE (files->data));
 
             if (is_undo_redo)
             {
@@ -204,12 +204,16 @@ batch_rename_sort_lists_for_rename (GList    **selection,
                  files2 != NULL && new_names_list2 != NULL;
                  files2 = files2->next, new_names_list2 = new_names_list2->next)
             {
-                g_autofree gchar *file_name = NULL;
+                const char *file_name;
+                g_autoptr (NautilusFile) parent2 = NULL;
 
                 file_name = nautilus_file_get_name (NAUTILUS_FILE (files2->data));
                 new_name = new_names_list2->data;
 
-                if (files2 != files && g_strcmp0 (file_name, new_file_name->str) == 0)
+                parent2 = nautilus_file_get_parent (NAUTILUS_FILE (files2->data));
+
+                if (files2 != files && g_strcmp0 (file_name, new_file_name->str) == 0 &&
+                    parent == parent2)
                 {
                     file = NAUTILUS_FILE (files2->data);
 
@@ -258,7 +262,7 @@ batch_rename_sort_lists_for_rename (GList    **selection,
 
 /* This function changes the background color of the replaced part of the name */
 GString *
-batch_rename_replace_label_text (gchar       *label,
+batch_rename_replace_label_text (const char  *label,
                                  const gchar *substring)
 {
     GString *new_label;
@@ -314,7 +318,7 @@ batch_rename_replace_label_text (gchar       *label,
 
 static gchar *
 get_metadata (GList        *selection_metadata,
-              gchar        *file_name,
+              const char   *file_name,
               MetadataType  metadata_type)
 {
     GList *l;
@@ -350,17 +354,10 @@ batch_rename_format (NautilusFile *file,
     GString *new_name;
     gboolean added_tag;
     MetadataType metadata_type;
-    g_autofree gchar *file_name = NULL;
-    g_autofree gchar *extension = NULL;
-    gint i;
+    const char *file_name;
     gchar *metadata;
 
     file_name = nautilus_file_get_display_name (file);
-    if (!nautilus_file_is_directory (file))
-    {
-        extension = nautilus_file_get_extension (file);
-    }
-
     new_name = g_string_new ("");
 
     for (l = text_chunks; l != NULL; l = l->next)
@@ -368,7 +365,7 @@ batch_rename_format (NautilusFile *file,
         added_tag = FALSE;
         tag_string = l->data;
 
-        for (i = 0; i < G_N_ELEMENTS (numbering_tags_constants); i++)
+        for (guint i = 0; i < G_N_ELEMENTS (numbering_tags_constants); i++)
         {
             g_autofree gchar *tag_text_representation = NULL;
 
@@ -412,7 +409,7 @@ batch_rename_format (NautilusFile *file,
             continue;
         }
 
-        for (i = 0; i < G_N_ELEMENTS (metadata_tags_constants); i++)
+        for (guint i = 0; i < G_N_ELEMENTS (metadata_tags_constants); i++)
         {
             g_autofree gchar *tag_text_representation = NULL;
 
@@ -442,9 +439,8 @@ batch_rename_format (NautilusFile *file,
                         }
                         else
                         {
-                            g_autofree gchar *base_name = NULL;
-                            base_name = eel_filename_strip_extension (file_name);
-                            new_name = g_string_append (new_name, base_name);
+                            const char *extension = nautilus_filename_get_extension (file_name);
+                            new_name = g_string_append_len (new_name, file_name, extension - file_name);
                         }
                     }
                     break;
@@ -477,10 +473,12 @@ batch_rename_format (NautilusFile *file,
     {
         new_name = g_string_append (new_name, file_name);
     }
-    else
+    else if (!nautilus_file_is_directory (file))
     {
-        if (extension != NULL)
+        const char *name = nautilus_file_get_name (file);
+        if (name != NULL)
         {
+            const char *extension = nautilus_filename_get_extension (name);
             new_name = g_string_append (new_name, extension);
         }
     }
@@ -500,8 +498,6 @@ batch_rename_dialog_get_new_names_list (NautilusBatchRenameDialogMode  mode,
     GList *result;
     GString *file_name;
     GString *new_name;
-    NautilusFile *file;
-    gchar *name;
     gint count;
 
     result = NULL;
@@ -509,9 +505,9 @@ batch_rename_dialog_get_new_names_list (NautilusBatchRenameDialogMode  mode,
 
     for (l = selection; l != NULL; l = l->next)
     {
-        file = NAUTILUS_FILE (l->data);
+        NautilusFile *file = NAUTILUS_FILE (l->data);
+        const char *name = nautilus_file_get_name (file);
 
-        name = nautilus_file_get_name (file);
         file_name = g_string_new (name);
 
         /* get the new name here and add it to the list*/
@@ -533,7 +529,6 @@ batch_rename_dialog_get_new_names_list (NautilusBatchRenameDialogMode  mode,
         }
 
         g_string_free (file_name, TRUE);
-        g_free (name);
     }
 
     return result;
@@ -550,16 +545,13 @@ file_name_conflicts_with_results (GList   *selection,
 {
     GList *l1;
     GList *l2;
-    NautilusFile *selection_file;
     GString *new_name;
 
     for (l1 = selection, l2 = new_names; l1 != NULL && l2 != NULL; l1 = l1->next, l2 = l2->next)
     {
-        g_autofree gchar *name1 = NULL;
+        NautilusFile *selection_file = NAUTILUS_FILE (l1->data);
+        const char *name1 = nautilus_file_get_name (selection_file);
         g_autofree gchar *selection_parent_uri = NULL;
-
-        selection_file = NAUTILUS_FILE (l1->data);
-        name1 = nautilus_file_get_name (selection_file);
 
         selection_parent_uri = nautilus_file_get_parent_uri (selection_file);
 
@@ -678,10 +670,8 @@ nautilus_batch_rename_dialog_sort (GList      *selection,
                                    GHashTable *creation_date_table)
 {
     GList *l, *l2;
-    NautilusFile *file;
     GList *create_date_list;
     GList *create_date_list_sorted;
-    gchar *name;
 
     if (mode == ORIGINAL_ASCENDING)
     {
@@ -709,15 +699,12 @@ nautilus_batch_rename_dialog_sort (GList      *selection,
 
         for (l = selection; l != NULL; l = l->next)
         {
-            CreateDateElem *elem;
-            elem = g_new (CreateDateElem, 1);
+            NautilusFile *file = NAUTILUS_FILE (l->data);
+            const char *name = nautilus_file_get_name (file);
+            CreateDateElem *elem = g_new (CreateDateElem, 1);
 
-            file = NAUTILUS_FILE (l->data);
-
-            name = nautilus_file_get_name (file);
             elem->file = file;
             elem->position = GPOINTER_TO_INT (g_hash_table_lookup (creation_date_table, name));
-            g_free (name);
 
             create_date_list = g_list_prepend (create_date_list, elem);
         }
@@ -952,10 +939,7 @@ on_cursor_callback (GObject      *object,
                 break;
             }
 
-            /* TODO: Figure out how to inform the user of why the metadata is
-             * unavailable when one or more contains the unallowed character "/"
-             */
-            if (!current_metadata || g_strrstr (current_metadata, "/"))
+            if (!current_metadata)
             {
                 remove_metadata (query_data,
                                  metadata_type);
@@ -988,6 +972,7 @@ on_cursor_callback (GObject      *object,
                 else
                 {
                     file_metadata->metadata[metadata_type] = g_string_new (current_metadata);
+                    g_string_replace (file_metadata->metadata[metadata_type], "/", "_", 0);
                 }
             }
         }
@@ -1040,17 +1025,27 @@ check_metadata_for_selection (NautilusBatchRenameDialog *dialog,
                               GCancellable              *cancellable)
 {
     TrackerSparqlConnection *connection;
-    GString *query;
+    g_autoptr (GString) query = NULL;
     GList *l;
-    NautilusFile *file;
     GError *error;
     QueryData *query_data;
-    gchar *file_name;
     FileMetadata *file_metadata;
     GList *selection_metadata;
     guint i;
     g_autofree gchar *parent_uri = NULL;
     gchar *file_name_escaped;
+
+    connection = nautilus_tracker_get_miner_fs_connection (&error);
+    if (!connection)
+    {
+        if (error)
+        {
+            g_warning ("Error on batch rename tracker connection: %s", error->message);
+            g_error_free (error);
+        }
+
+        return;
+    }
 
     error = NULL;
     selection_metadata = NULL;
@@ -1081,8 +1076,7 @@ check_metadata_for_selection (NautilusBatchRenameDialog *dialog,
 
     for (l = selection; l != NULL; l = l->next)
     {
-        file = NAUTILUS_FILE (l->data);
-        file_name = nautilus_file_get_name (file);
+        const char *file_name = nautilus_file_get_name (NAUTILUS_FILE (l->data));
         file_name_escaped = tracker_sparql_escape_string (file_name);
 
         if (l == selection)
@@ -1110,25 +1104,12 @@ check_metadata_for_selection (NautilusBatchRenameDialog *dialog,
 
         selection_metadata = g_list_prepend (selection_metadata, file_metadata);
 
-        g_free (file_name);
         g_free (file_name_escaped);
     }
 
     selection_metadata = g_list_reverse (selection_metadata);
 
     g_string_append (query, "} ORDER BY ASC(nie:contentCreated(?content))");
-
-    connection = nautilus_tracker_get_miner_fs_connection (&error);
-    if (!connection)
-    {
-        if (error)
-        {
-            g_warning ("Error on batch rename tracker connection: %s", error->message);
-            g_error_free (error);
-        }
-
-        return;
-    }
 
     query_data = g_new (QueryData, 1);
     query_data->date_order_hash_table = g_hash_table_new_full (g_str_hash,
@@ -1149,8 +1130,6 @@ check_metadata_for_selection (NautilusBatchRenameDialog *dialog,
                                            cancellable,
                                            batch_rename_dialog_query_callback,
                                            query_data);
-
-    g_string_free (query, TRUE);
 }
 
 GList *

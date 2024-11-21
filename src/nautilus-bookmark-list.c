@@ -28,6 +28,7 @@
 #include "nautilus-file-utilities.h"
 #include "nautilus-file.h"
 #include "nautilus-icon-names.h"
+#include "nautilus-scheme.h"
 
 #include <gio/gio.h>
 #include <string.h>
@@ -86,18 +87,6 @@ new_bookmark_from_uri (const char *uri,
 }
 
 static GFile *
-nautilus_bookmark_list_get_legacy_file (void)
-{
-    g_autofree char *filename = NULL;
-
-    filename = g_build_filename (g_get_home_dir (),
-                                 ".gtk-bookmarks",
-                                 NULL);
-
-    return g_file_new_for_path (filename);
-}
-
-static GFile *
 nautilus_bookmark_list_get_file (void)
 {
     g_autofree char *filename = NULL;
@@ -124,11 +113,16 @@ bookmark_in_list_changed_callback (NautilusBookmark     *bookmark,
 }
 
 static void
-bookmark_in_list_notify (GObject              *object,
-                         GParamSpec           *pspec,
-                         NautilusBookmarkList *bookmarks)
+bookmark_in_list_icon_changed (NautilusBookmarkList *bookmarks)
 {
     /* emit the changed signal without saving, as only appearance properties changed */
+    g_signal_emit (bookmarks, signals[CHANGED], 0);
+}
+
+static void
+bookmark_in_list_name_changed (NautilusBookmarkList *bookmarks)
+{
+    nautilus_bookmark_list_save_file (bookmarks);
     g_signal_emit (bookmarks, signals[CHANGED], 0);
 }
 
@@ -237,9 +231,9 @@ insert_bookmark_internal (NautilusBookmarkList *bookmarks,
     g_signal_connect_object (bookmark, "contents-changed",
                              G_CALLBACK (bookmark_in_list_changed_callback), bookmarks, 0);
     g_signal_connect_object (bookmark, "notify::icon",
-                             G_CALLBACK (bookmark_in_list_notify), bookmarks, 0);
+                             G_CALLBACK (bookmark_in_list_icon_changed), bookmarks, G_CONNECT_SWAPPED);
     g_signal_connect_object (bookmark, "notify::name",
-                             G_CALLBACK (bookmark_in_list_notify), bookmarks, 0);
+                             G_CALLBACK (bookmark_in_list_name_changed), bookmarks, G_CONNECT_SWAPPED);
 }
 
 /**
@@ -311,6 +305,176 @@ nautilus_bookmark_list_append (NautilusBookmarkList *bookmarks,
 
     insert_bookmark_internal (bookmarks, g_object_ref (bookmark), -1);
     nautilus_bookmark_list_save_file (bookmarks);
+}
+
+/**
+ * nautilus_bookmark_list_contains:
+ *
+ * Check whether a bookmark with matching name and url is already in the list.
+ * @bookmarks: NautilusBookmarkList to check contents of.
+ * @bookmark: NautilusBookmark to match against.
+ *
+ * Return value: TRUE if matching bookmark is in list, FALSE otherwise
+ **/
+gboolean
+nautilus_bookmark_list_contains (NautilusBookmarkList *bookmarks,
+                                 NautilusBookmark     *bookmark)
+{
+    g_return_val_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks), FALSE);
+    g_return_val_if_fail (NAUTILUS_IS_BOOKMARK (bookmark), FALSE);
+
+    return g_list_find_custom (bookmarks->list,
+                               (gpointer) bookmark,
+                               nautilus_bookmark_compare_with) != NULL;
+}
+
+/**
+ * nautilus_bookmark_list_delete_item_at:
+ *
+ * Delete the bookmark at the specified position.
+ * @bookmarks: the list of bookmarks.
+ * @index: index, must be less than length of list.
+ **/
+void
+nautilus_bookmark_list_delete_item_at (NautilusBookmarkList *bookmarks,
+                                       guint                 index)
+{
+    g_return_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks));
+    g_return_if_fail (index < g_list_length (bookmarks->list));
+
+    GList *doomed = g_list_nth (bookmarks->list, index);
+
+    g_assert (NAUTILUS_IS_BOOKMARK (doomed->data));
+    stop_monitoring_bookmark (bookmarks, NAUTILUS_BOOKMARK (doomed->data));
+    g_object_unref (doomed->data);
+
+    bookmarks->list = g_list_delete_link (bookmarks->list, doomed);
+
+    nautilus_bookmark_list_save_file (bookmarks);
+}
+
+/**
+ * nautilus_bookmark_list_move_item:
+ *
+ * Move the item from the given position to the destination.
+ * @index: the index of the first bookmark.
+ * @destination: the index of the second bookmark.
+ **/
+void
+nautilus_bookmark_list_move_item (NautilusBookmarkList *bookmarks,
+                                  guint                 index,
+                                  guint                 destination)
+{
+    if (index == destination)
+    {
+        return;
+    }
+
+    GList *link_to_move = g_list_nth (bookmarks->list, index);
+
+    bookmarks->list = g_list_remove_link (bookmarks->list,
+                                          link_to_move);
+
+    GList *link_at_destination = g_list_nth (bookmarks->list, destination);
+    /* NULL link at destination means end of the list */
+    bookmarks->list = g_list_insert_before_link (bookmarks->list,
+                                                 link_at_destination,
+                                                 link_to_move);
+
+    nautilus_bookmark_list_save_file (bookmarks);
+}
+
+/**
+ * nautilus_bookmark_list_delete_items_with_uri:
+ *
+ * Delete all bookmarks with the given uri.
+ * @bookmarks: the list of bookmarks.
+ * @uri: The uri to match.
+ **/
+void
+nautilus_bookmark_list_delete_items_with_uri (NautilusBookmarkList *bookmarks,
+                                              const char           *uri)
+{
+    g_return_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks));
+    g_return_if_fail (uri != NULL);
+
+    gboolean list_changed = FALSE;
+    GList *next = NULL;
+
+    for (GList *node = bookmarks->list; node != NULL; node = next)
+    {
+        next = node->next;
+
+        g_autofree char *bookmark_uri = nautilus_bookmark_get_uri (NAUTILUS_BOOKMARK (node->data));
+
+        if (g_strcmp0 (bookmark_uri, uri) == 0)
+        {
+            stop_monitoring_bookmark (bookmarks, NAUTILUS_BOOKMARK (node->data));
+            g_object_unref (node->data);
+            bookmarks->list = g_list_delete_link (bookmarks->list, node);
+            list_changed = TRUE;
+        }
+    }
+
+    if (list_changed)
+    {
+        nautilus_bookmark_list_save_file (bookmarks);
+    }
+}
+
+/**
+ * nautilus_bookmark_list_insert_item:
+ *
+ * Insert a bookmark at a specified position.
+ * @bookmarks: the list of bookmarks.
+ * @index: the position to insert the bookmark at.
+ * @new_bookmark: the bookmark to insert a copy of.
+ **/
+void
+nautilus_bookmark_list_insert_item (NautilusBookmarkList *bookmarks,
+                                    NautilusBookmark     *new_bookmark,
+                                    guint                 index)
+{
+    g_return_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks));
+    g_return_if_fail (index <= g_list_length (bookmarks->list));
+
+    insert_bookmark_internal (bookmarks, g_object_ref (new_bookmark), index);
+    nautilus_bookmark_list_save_file (bookmarks);
+}
+
+/**
+ * nautilus_bookmark_list_item_at:
+ *
+ * Get the bookmark at the specified position.
+ * @bookmarks: the list of bookmarks.
+ * @index: index, must be less than length of list.
+ *
+ * Return value: the bookmark at position @index in @bookmarks.
+ **/
+NautilusBookmark *
+nautilus_bookmark_list_item_at (NautilusBookmarkList *bookmarks,
+                                guint                 index)
+{
+    g_return_val_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks), NULL);
+    g_return_val_if_fail (index < g_list_length (bookmarks->list), NULL);
+
+    return NAUTILUS_BOOKMARK (g_list_nth_data (bookmarks->list, index));
+}
+
+/**
+ * nautilus_bookmark_list_length:
+ *
+ * Get the number of bookmarks in the list.
+ * @bookmarks: the list of bookmarks.
+ *
+ * Return value: the length of the bookmark list.
+ **/
+guint
+nautilus_bookmark_list_length (NautilusBookmarkList *bookmarks)
+{
+    g_return_val_if_fail (NAUTILUS_IS_BOOKMARK_LIST (bookmarks), 0);
+
+    return g_list_length (bookmarks->list);
 }
 
 static void
@@ -387,11 +551,6 @@ load_io_thread (GTask        *task,
     GError *error = NULL;
 
     file = nautilus_bookmark_list_get_file ();
-    if (!g_file_query_exists (file, NULL))
-    {
-        g_object_unref (file);
-        file = nautilus_bookmark_list_get_legacy_file ();
-    }
 
     g_file_load_contents (file, NULL, &contents, NULL, NULL, &error);
     g_object_unref (file);
@@ -611,31 +770,28 @@ gboolean
 nautilus_bookmark_list_can_bookmark_location (NautilusBookmarkList *list,
                                               GFile                *location)
 {
-    g_autoptr (NautilusBookmark) bookmark = NULL;
-
     if (nautilus_bookmark_list_item_with_location (list, location, NULL))
     {
         /* Already bookmarked */
         return FALSE;
     }
 
-    if (nautilus_is_search_directory (location))
+    if (g_file_has_uri_scheme (location, SCHEME_SEARCH))
     {
         return FALSE;
     }
 
-    if (nautilus_is_recent_directory (location) ||
-        nautilus_is_starred_directory (location) ||
+    if (g_file_has_uri_scheme (location, SCHEME_RECENT) ||
+        g_file_has_uri_scheme (location, SCHEME_STARRED) ||
+        g_file_has_uri_scheme (location, SCHEME_NETWORK_VIEW) ||
         nautilus_is_home_directory (location) ||
-        nautilus_is_trash_directory (location) ||
-        nautilus_is_other_locations_directory (location))
+        g_file_has_uri_scheme (location, SCHEME_TRASH))
     {
         /* Already in the sidebar */
         return FALSE;
     }
 
-    bookmark = nautilus_bookmark_new (location, NULL);
-    return !nautilus_bookmark_get_is_builtin (bookmark);
+    return TRUE;
 }
 
 /**

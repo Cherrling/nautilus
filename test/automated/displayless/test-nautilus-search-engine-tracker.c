@@ -1,3 +1,4 @@
+#include "nautilus-tracker-utilities.h"
 #include "test-utilities.h"
 
 /* Time in seconds we allow for Tracker Miners to index the file */
@@ -48,9 +49,8 @@ tracker_events_cb (TrackerNotifier *self,
                    gpointer         user_data)
 {
     TrackerAwaitFileData *data = user_data;
-    int i;
 
-    for (i = 0; i < events->len; i++)
+    for (guint i = 0; i < events->len; i++)
     {
         TrackerNotifierEvent *event = g_ptr_array_index (events, i);
 
@@ -94,7 +94,7 @@ create_test_data (TrackerSparqlConnection *connection,
 
     g_main_loop_run (main_loop);
 
-    g_assert (await_data->created);
+    g_assert_true (await_data->created);
     g_source_remove (timeout_id);
     g_clear_signal_handler (&signal_id, notifier);
 
@@ -137,6 +137,8 @@ main (int   argc,
     g_autoptr (GFile) location = NULL;
     g_autoptr (GError) error = NULL;
     const gchar *indexed_tmpdir;
+
+    nautilus_tracker_setup_host_miner_fs_connection_sync ();
 
     indexed_tmpdir = g_getenv ("TRACKER_INDEXED_TMPDIR");
     if (!indexed_tmpdir)

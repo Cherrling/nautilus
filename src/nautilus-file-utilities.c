@@ -22,19 +22,18 @@
 #include <config.h>
 #include "nautilus-file-utilities.h"
 
-#include "nautilus-global-preferences.h"
-#include "nautilus-icon-names.h"
-#include "nautilus-lib-self-check-functions.h"
-#include "nautilus-metadata.h"
+#include "nautilus-application.h"
 #include "nautilus-file.h"
 #include "nautilus-file-operations.h"
+#include "nautilus-filename-utilities.h"
+#include "nautilus-global-preferences.h"
+#include "nautilus-icon-names.h"
+#include "nautilus-metadata.h"
+#include "nautilus-network-directory.h"
+#include "nautilus-scheme.h"
 #include "nautilus-search-directory.h"
 #include "nautilus-starred-directory.h"
 #include "nautilus-ui-utilities.h"
-#include <eel/eel-glib-extensions.h>
-#include <eel/eel-string.h>
-#include <eel/eel-debug.h>
-#include <eel/eel-vfs-extensions.h>
 #include <glib.h>
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
@@ -45,255 +44,11 @@
 #define NAUTILUS_USER_DIRECTORY_NAME "nautilus"
 #define DEFAULT_NAUTILUS_DIRECTORY_MODE (0755)
 
-/* Allowed characters outside alphanumeric for unreserved. */
-#define G_URI_OTHER_UNRESERVED "-._~"
-
-/* This or something equivalent will eventually go into glib/guri.h */
-gboolean
-nautilus_uri_parse (const char  *uri,
-                    char       **host,
-                    guint16     *port,
-                    char       **userinfo)
-{
-    char *tmp_str;
-    const char *start, *p;
-    char c;
-
-    g_return_val_if_fail (uri != NULL, FALSE);
-
-    if (host)
-    {
-        *host = NULL;
-    }
-
-    if (port)
-    {
-        *port = 0;
-    }
-
-    if (userinfo)
-    {
-        *userinfo = NULL;
-    }
-
-    /* From RFC 3986 Decodes:
-     * URI          = scheme ":" hier-part [ "?" query ] [ "#" fragment ]
-     * hier-part    = "//" authority path-abempty
-     * path-abempty = *( "/" segment )
-     * authority    = [ userinfo "@" ] host [ ":" port ]
-     */
-
-    /* Check we have a valid scheme */
-    tmp_str = g_uri_parse_scheme (uri);
-
-    if (tmp_str == NULL)
-    {
-        return FALSE;
-    }
-
-    g_free (tmp_str);
-
-    /* Decode hier-part:
-     *  hier-part   = "//" authority path-abempty
-     */
-    p = uri;
-    start = strstr (p, "//");
-
-    if (start == NULL)
-    {
-        return FALSE;
-    }
-
-    start += 2;
-
-    if (strchr (start, '@') != NULL)
-    {
-        /* Decode userinfo:
-         * userinfo      = *( unreserved / pct-encoded / sub-delims / ":" )
-         * unreserved    = ALPHA / DIGIT / "-" / "." / "_" / "~"
-         * pct-encoded   = "%" HEXDIG HEXDIG
-         */
-        p = start;
-        while (1)
-        {
-            c = *p++;
-
-            if (c == '@')
-            {
-                break;
-            }
-
-            /* pct-encoded */
-            if (c == '%')
-            {
-                if (!(g_ascii_isxdigit (p[0]) ||
-                      g_ascii_isxdigit (p[1])))
-                {
-                    return FALSE;
-                }
-
-                p++;
-
-                continue;
-            }
-
-            /* unreserved /  sub-delims / : */
-            if (!(g_ascii_isalnum (c) ||
-                  strchr (G_URI_OTHER_UNRESERVED, c) ||
-                  strchr (G_URI_RESERVED_CHARS_SUBCOMPONENT_DELIMITERS, c) ||
-                  c == ':'))
-            {
-                return FALSE;
-            }
-        }
-
-        if (userinfo)
-        {
-            *userinfo = g_strndup (start, p - start - 1);
-        }
-
-        start = p;
-    }
-    else
-    {
-        p = start;
-    }
-
-
-    /* decode host:
-     * host          = IP-literal / IPv4address / reg-name
-     * reg-name      = *( unreserved / pct-encoded / sub-delims )
-     */
-
-    /* If IPv6 or IPvFuture */
-    if (*p == '[')
-    {
-        start++;
-        p++;
-        while (1)
-        {
-            c = *p++;
-
-            if (c == ']')
-            {
-                break;
-            }
-
-            /* unreserved /  sub-delims */
-            if (!(g_ascii_isalnum (c) ||
-                  strchr (G_URI_OTHER_UNRESERVED, c) ||
-                  strchr (G_URI_RESERVED_CHARS_SUBCOMPONENT_DELIMITERS, c) ||
-                  c == ':' ||
-                  c == '.'))
-            {
-                goto error;
-            }
-        }
-    }
-    else
-    {
-        while (1)
-        {
-            c = *p++;
-
-            if (c == ':' ||
-                c == '/' ||
-                c == '?' ||
-                c == '#' ||
-                c == '\0')
-            {
-                break;
-            }
-
-            /* pct-encoded */
-            if (c == '%')
-            {
-                if (!(g_ascii_isxdigit (p[0]) ||
-                      g_ascii_isxdigit (p[1])))
-                {
-                    goto error;
-                }
-
-                p++;
-
-                continue;
-            }
-
-            /* unreserved /  sub-delims */
-            if (!(g_ascii_isalnum (c) ||
-                  strchr (G_URI_OTHER_UNRESERVED, c) ||
-                  strchr (G_URI_RESERVED_CHARS_SUBCOMPONENT_DELIMITERS, c)))
-            {
-                goto error;
-            }
-        }
-    }
-
-    if (host)
-    {
-        *host = g_uri_unescape_segment (start, p - 1, NULL);
-    }
-
-    if (c == ':')
-    {
-        /* Decode pot:
-         *  port          = *DIGIT
-         */
-        guint tmp = 0;
-
-        while (1)
-        {
-            c = *p++;
-
-            if (c == '/' ||
-                c == '?' ||
-                c == '#' ||
-                c == '\0')
-            {
-                break;
-            }
-
-            if (!g_ascii_isdigit (c))
-            {
-                goto error;
-            }
-
-            tmp = (tmp * 10) + (c - '0');
-
-            if (tmp > 65535)
-            {
-                goto error;
-            }
-        }
-        if (port)
-        {
-            *port = (guint16) tmp;
-        }
-    }
-
-    return TRUE;
-
-error:
-    if (host && *host)
-    {
-        g_free (*host);
-        *host = NULL;
-    }
-
-    if (userinfo && *userinfo)
-    {
-        g_free (*userinfo);
-        *userinfo = NULL;
-    }
-
-    return FALSE;
-}
-
 char *
 nautilus_compute_title_for_location (GFile *location)
 {
     NautilusFile *file;
-    GMount *mount;
+    g_autoptr (GMount) mount = NULL;
     char *title;
 
     /* TODO-gio: This doesn't really work all that great if the
@@ -304,13 +59,10 @@ nautilus_compute_title_for_location (GFile *location)
         return g_strdup (_("Home"));
     }
 
-    if ((mount = nautilus_get_mounted_mount_for_root (location)) != NULL)
+    mount = nautilus_get_mounted_mount_for_root (location);
+    if (mount != NULL)
     {
-        title = g_mount_get_name (mount);
-
-        g_object_unref (mount);
-
-        return title;
+        return g_mount_get_name (mount);
     }
 
     title = NULL;
@@ -318,23 +70,8 @@ nautilus_compute_title_for_location (GFile *location)
     {
         file = nautilus_file_get (location);
 
-        if (nautilus_file_is_other_locations (file))
-        {
-            title = g_strdup (_("Other Locations"));
-        }
-        else if (nautilus_file_is_starred_location (file))
-        {
-            title = g_strdup (_("Starred"));
-        }
-        else
-        {
-            title = nautilus_file_get_description (file);
+        title = g_strdup (nautilus_file_get_display_name (file));
 
-            if (title == NULL)
-            {
-                title = nautilus_file_get_display_name (file);
-            }
-        }
         nautilus_file_unref (file);
     }
 
@@ -388,7 +125,16 @@ nautilus_get_user_directory (void)
 char *
 nautilus_get_scripts_directory_path (void)
 {
-    return g_build_filename (g_get_user_data_dir (), "nautilus", "scripts", NULL);
+    if (nautilus_application_is_sandboxed ())
+    {
+        /* g_get_user_data_dir() leads to a different path then expected under
+         * the flatpak sandbox */
+        return g_build_filename (g_get_home_dir (), ".local", "share", "nautilus", "scripts", NULL);
+    }
+    else
+    {
+        return g_build_filename (g_get_user_data_dir (), "nautilus", "scripts", NULL);
+    }
 }
 
 char *
@@ -473,55 +219,11 @@ nautilus_is_root_directory (GFile *dir)
 }
 
 gboolean
-nautilus_is_search_directory (GFile *dir)
+nautilus_is_root_for_scheme (GFile      *dir,
+                             const char *scheme)
 {
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (dir);
-    return eel_uri_is_search (uri);
-}
-
-gboolean
-nautilus_is_recent_directory (GFile *dir)
-{
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (dir);
-
-    return eel_uri_is_recent (uri);
-}
-
-gboolean
-nautilus_is_starred_directory (GFile *dir)
-{
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (dir);
-
-    if (eel_uri_is_starred (uri))
-    {
-        return TRUE;
-    }
-
-    return FALSE;
-}
-
-gboolean
-nautilus_is_trash_directory (GFile *dir)
-{
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (dir);
-    return eel_uri_is_trash (uri);
-}
-
-gboolean
-nautilus_is_other_locations_directory (GFile *dir)
-{
-    g_autofree gchar *uri = NULL;
-
-    uri = g_file_get_uri (dir);
-    return eel_uri_is_other_locations (uri);
+    return (g_file_has_uri_scheme (dir, scheme) &&
+            !g_file_has_parent (dir, NULL));
 }
 
 GMount *
@@ -532,13 +234,14 @@ nautilus_get_mounted_mount_for_root (GFile *location)
     GList *l;
     GMount *mount;
     GMount *result = NULL;
-    GFile *root = NULL;
 
     volume_monitor = g_volume_monitor_get ();
     mounts = g_volume_monitor_get_mounts (volume_monitor);
 
     for (l = mounts; l != NULL; l = l->next)
     {
+        g_autoptr (GFile) root = NULL;
+
         mount = l->data;
 
         if (g_mount_is_shadowed (mount))
@@ -554,7 +257,6 @@ nautilus_get_mounted_mount_for_root (GFile *location)
         }
     }
 
-    g_clear_object (&root);
     g_list_free_full (mounts, g_object_unref);
 
     return result;
@@ -564,34 +266,18 @@ GFile *
 nautilus_generate_unique_file_in_directory (GFile      *directory,
                                             const char *basename)
 {
-    g_autofree char *basename_without_extension = NULL;
-    const char *extension;
-    GFile *child;
-    int copy;
-
     g_return_val_if_fail (directory != NULL, NULL);
     g_return_val_if_fail (basename != NULL, NULL);
     g_return_val_if_fail (g_file_query_exists (directory, NULL), NULL);
 
-    basename_without_extension = eel_filename_strip_extension (basename);
-    extension = eel_filename_get_extension_offset (basename);
+    GFile *child = g_file_get_child (directory, basename);
 
-    child = g_file_get_child (directory, basename);
-
-    copy = 1;
-    while (g_file_query_exists (child, NULL))
+    for (size_t counter = 1; g_file_query_exists (child, NULL); counter += 1)
     {
-        g_autofree char *filename = NULL;
+        g_autofree char *filename = nautilus_filename_for_conflict (basename, counter, -1, FALSE);
 
         g_object_unref (child);
-
-        filename = g_strdup_printf ("%s (%d)%s",
-                                    basename_without_extension,
-                                    copy,
-                                    extension ? extension : "");
         child = g_file_get_child (directory, filename);
-
-        copy++;
     }
 
     return child;
@@ -600,7 +286,6 @@ nautilus_generate_unique_file_in_directory (GFile      *directory,
 GFile *
 nautilus_find_existing_uri_in_hierarchy (GFile *location)
 {
-    GFileInfo *info;
     GFile *tmp;
 
     g_assert (location != NULL);
@@ -608,10 +293,11 @@ nautilus_find_existing_uri_in_hierarchy (GFile *location)
     location = g_object_ref (location);
     while (location != NULL)
     {
+        g_autoptr (GFileInfo) info = NULL;
+
         info = g_file_query_info (location,
                                   G_FILE_ATTRIBUTE_STANDARD_NAME,
                                   0, NULL, NULL);
-        g_object_unref (info);
         if (info != NULL)
         {
             return location;
@@ -641,18 +327,18 @@ special_directory_get_icon (GUserDirectory directory,
                             gboolean       symbolic)
 {
 #define ICON_CASE(x)                                                     \
-    case G_USER_DIRECTORY_ ## x:                                     \
-        return (symbolic) ? g_themed_icon_new (NAUTILUS_ICON_FOLDER_ ## x) : g_themed_icon_new (NAUTILUS_ICON_FULLCOLOR_FOLDER_ ## x);
+            case G_USER_DIRECTORY_ ## x:                                     \
+                return (symbolic) ? g_themed_icon_new (NAUTILUS_ICON_FOLDER_ ## x) : g_themed_icon_new (NAUTILUS_ICON_FULLCOLOR_FOLDER_ ## x);
 
     switch (directory)
     {
-        ICON_CASE (DOCUMENTS);
-        ICON_CASE (DOWNLOAD);
-        ICON_CASE (MUSIC);
-        ICON_CASE (PICTURES);
-        ICON_CASE (PUBLIC_SHARE);
-        ICON_CASE (TEMPLATES);
-        ICON_CASE (VIDEOS);
+    ICON_CASE (DOCUMENTS);
+    ICON_CASE (DOWNLOAD);
+    ICON_CASE (MUSIC);
+    ICON_CASE (PICTURES);
+    ICON_CASE (PUBLIC_SHARE);
+    ICON_CASE (TEMPLATES);
+    ICON_CASE (VIDEOS);
 
         default:
         {
@@ -834,10 +520,9 @@ ensure_dirs_task_thread_func (GTask        *task,
     RestoreFilesData *data = task_data;
     NautilusFile *original_dir;
     GFile *original_dir_location;
-    GList *original_dirs, *l;
+    g_autoptr (GList) original_dirs = g_hash_table_get_keys (data->original_dirs_hash);
 
-    original_dirs = g_hash_table_get_keys (data->original_dirs_hash);
-    for (l = original_dirs; l != NULL; l = l->next)
+    for (GList *l = original_dirs; l != NULL; l = l->next)
     {
         original_dir = NAUTILUS_FILE (l->data);
         original_dir_location = nautilus_file_get_location (original_dir);
@@ -870,25 +555,21 @@ void
 nautilus_restore_files_from_trash (GList     *files,
                                    GtkWindow *parent_window)
 {
-    NautilusFile *file;
     GHashTable *original_dirs_hash;
-    GList *unhandled_files, *l;
-    char *message, *file_name;
+    g_autolist (NautilusFile) unhandled_files = NULL;
 
     original_dirs_hash = nautilus_trashed_files_get_original_directories (files, &unhandled_files);
 
-    for (l = unhandled_files; l != NULL; l = l->next)
+    for (GList *l = unhandled_files; l != NULL; l = l->next)
     {
-        file = NAUTILUS_FILE (l->data);
-        file_name = nautilus_file_get_display_name (file);
-        message = g_strdup_printf (_("Could not determine original location of “%s” "), file_name);
-        g_free (file_name);
+        NautilusFile *file = NAUTILUS_FILE (l->data);
+        g_autofree char *message = g_strdup_printf (_("Could not determine original location of “%s” "),
+                                                    nautilus_file_get_display_name (file));
 
         show_dialog (message,
                      _("The item cannot be restored from trash"),
                      parent_window,
                      GTK_MESSAGE_WARNING);
-        g_free (message);
     }
 
     if (original_dirs_hash != NULL)
@@ -896,8 +577,6 @@ nautilus_restore_files_from_trash (GList     *files,
         restore_files_ensure_parent_directories (original_dirs_hash, parent_window);
         g_hash_table_unref (original_dirs_hash);
     }
-
-    nautilus_file_list_unref (unhandled_files);
 }
 
 typedef struct
@@ -992,39 +671,26 @@ char *
 get_message_for_content_type (const char *content_type)
 {
     char *message;
-    char *description;
-
-    description = g_content_type_get_description (content_type);
+    const GStrv known_types = (char *[])
+    {
+        "x-content/audio-cdda",
+        "x-content/audio-dvd",
+        "x-content/video-vcd",
+        "x-content/video-dvd",
+        "x-content/video-svcd",
+        "x-content/image-picturecd",
+        NULL,
+    };
 
     /* Customize greeting for well-known content types */
-    if (strcmp (content_type, "x-content/audio-cdda") == 0)
+    if (g_strv_contains ((const gchar **) known_types, content_type))
     {
-        /* translators: these describe the contents of removable media */
-        message = g_strdup (_("Audio CD"));
-    }
-    else if (strcmp (content_type, "x-content/audio-dvd") == 0)
-    {
-        message = g_strdup (_("Audio DVD"));
-    }
-    else if (strcmp (content_type, "x-content/video-dvd") == 0)
-    {
-        message = g_strdup (_("Video DVD"));
-    }
-    else if (strcmp (content_type, "x-content/video-vcd") == 0)
-    {
-        message = g_strdup (_("Video CD"));
-    }
-    else if (strcmp (content_type, "x-content/video-svcd") == 0)
-    {
-        message = g_strdup (_("Super Video CD"));
+        message = g_content_type_get_description (content_type);
     }
     else if (strcmp (content_type, "x-content/image-photocd") == 0)
     {
+        /* translators: these describe the contents of removable media */
         message = g_strdup (_("Photo CD"));
-    }
-    else if (strcmp (content_type, "x-content/image-picturecd") == 0)
-    {
-        message = g_strdup (_("Picture CD"));
     }
     else if (strcmp (content_type, "x-content/image-dcf") == 0)
     {
@@ -1045,10 +711,9 @@ get_message_for_content_type (const char *content_type)
     else
     {
         /* fallback to generic greeting */
+        g_autofree char *description = g_content_type_get_description (content_type);
         message = g_strdup_printf (_("Detected as “%s”"), description);
     }
-
-    g_free (description);
 
     return message;
 }
@@ -1099,7 +764,7 @@ get_message_for_two_content_types (const char * const *content_types)
 gboolean
 should_handle_content_type (const char *content_type)
 {
-    GAppInfo *default_app;
+    g_autoptr (GAppInfo) default_app = NULL;
 
     default_app = g_app_info_get_default_for_type (content_type, FALSE);
 
@@ -1122,54 +787,6 @@ should_handle_content_types (const char * const *content_types)
     }
 
     return FALSE;
-}
-
-gboolean
-nautilus_file_selection_equal (GList *selection_a,
-                               GList *selection_b)
-{
-    GList *al, *bl;
-    gboolean selection_matches;
-
-    if (selection_a == NULL || selection_b == NULL)
-    {
-        return (selection_a == selection_b);
-    }
-
-    if (g_list_length (selection_a) != g_list_length (selection_b))
-    {
-        return FALSE;
-    }
-
-    selection_matches = TRUE;
-
-    for (al = selection_a; al; al = al->next)
-    {
-        GFile *a_location = nautilus_file_get_location (NAUTILUS_FILE (al->data));
-        gboolean found = FALSE;
-
-        for (bl = selection_b; bl; bl = bl->next)
-        {
-            GFile *b_location = nautilus_file_get_location (NAUTILUS_FILE (bl->data));
-            found = g_file_equal (b_location, a_location);
-            g_object_unref (b_location);
-
-            if (found)
-            {
-                break;
-            }
-        }
-
-        selection_matches = found;
-        g_object_unref (a_location);
-
-        if (!selection_matches)
-        {
-            break;
-        }
-    }
-
-    return selection_matches;
 }
 
 static char *
@@ -1210,9 +827,9 @@ char *
 nautilus_get_common_filename_prefix (GList *file_list,
                                      int    min_required_len)
 {
-    GList *file_names = NULL;
-    GList *directory_names = NULL;
-    char *result_files;
+    g_autoptr (GPtrArray) file_names = NULL;
+    g_autoptr (GPtrArray) directory_names = NULL;
+    g_autofree char *result_files = NULL;
     g_autofree char *result = NULL;
     g_autofree char *result_trimmed = NULL;
 
@@ -1221,43 +838,45 @@ nautilus_get_common_filename_prefix (GList *file_list,
         return NULL;
     }
 
+    file_names = g_ptr_array_new_null_terminated (0, g_free, TRUE);
+    directory_names = g_ptr_array_new_null_terminated (0, g_free, TRUE);
+
     for (GList *l = file_list; l != NULL; l = l->next)
     {
         char *name;
 
         g_return_val_if_fail (NAUTILUS_IS_FILE (l->data), NULL);
 
-        name = nautilus_file_get_display_name (l->data);
+        name = g_strdup (nautilus_file_get_display_name (l->data));
 
         /* Since the concept of file extensions does not apply to directories,
          * we filter those out.
          */
         if (nautilus_file_is_directory (l->data))
         {
-            directory_names = g_list_prepend (directory_names, name);
+            g_ptr_array_add (directory_names, name);
         }
         else
         {
-            file_names = g_list_prepend (file_names, name);
+            g_ptr_array_add (file_names, name);
         }
     }
 
-    result_files = nautilus_get_common_filename_prefix_from_filenames (file_names, min_required_len);
+    result_files = nautilus_get_common_filename_prefix_from_filenames ((const char * const *) file_names->pdata,
+                                                                       min_required_len);
 
-    if (directory_names == NULL)
+    if (directory_names->len == 0)
     {
-        return result_files;
+        return g_steal_pointer (&result_files);
     }
 
     if (result_files != NULL)
     {
-        directory_names = g_list_prepend (directory_names, result_files);
+        g_ptr_array_add (directory_names, g_steal_pointer (&result_files));
     }
 
-    result = eel_str_get_common_prefix (directory_names, min_required_len);
-
-    g_list_free_full (file_names, g_free);
-    g_list_free_full (directory_names, g_free);
+    result = nautilus_filename_get_common_prefix ((const char * const *) directory_names->pdata,
+                                                  min_required_len);
 
     if (result == NULL)
     {
@@ -1275,42 +894,40 @@ nautilus_get_common_filename_prefix (GList *file_list,
 }
 
 char *
-nautilus_get_common_filename_prefix_from_filenames (GList *filenames,
-                                                    int    min_required_len)
+nautilus_get_common_filename_prefix_from_filenames (const char * const *filenames,
+                                                    int                 min_required_len)
 {
-    GList *stripped_filenames = NULL;
-    char *common_prefix;
-    char *truncated;
+    g_autoptr (GPtrArray) stripped_filenames = NULL;
+    g_autofree char *common_prefix = NULL;
+    g_autofree char *truncated = NULL;
     int common_prefix_len;
 
-    for (GList *i = filenames; i != NULL; i = i->next)
+    if (filenames == NULL || filenames[0] == NULL)
     {
-        gchar *stripped_filename;
-
-        stripped_filename = eel_filename_strip_extension (i->data);
-
-        stripped_filenames = g_list_prepend (stripped_filenames, stripped_filename);
+        return NULL;
     }
 
-    common_prefix = eel_str_get_common_prefix (stripped_filenames, min_required_len);
+    stripped_filenames = g_ptr_array_new_from_null_terminated_array ((gpointer *) filenames,
+                                                                     (GCopyFunc) nautilus_filename_strip_extension,
+                                                                     NULL,
+                                                                     g_free);
+
+    common_prefix = nautilus_filename_get_common_prefix ((const char * const *) stripped_filenames->pdata,
+                                                         min_required_len);
     if (common_prefix == NULL)
     {
         return NULL;
     }
 
-    g_list_free_full (stripped_filenames, g_free);
-
     truncated = trim_whitespace (common_prefix);
-    g_free (common_prefix);
 
     common_prefix_len = g_utf8_strlen (truncated, -1);
     if (common_prefix_len < min_required_len)
     {
-        g_free (truncated);
         return NULL;
     }
 
-    return truncated;
+    return g_steal_pointer (&truncated);
 }
 
 glong
@@ -1355,20 +972,13 @@ nautilus_get_max_child_name_length_for_location (GFile *location)
         max_child_name_length = name_max;
         if (path_max != -1)
         {
-            max_child_name_length = CLAMP ((path_max - 1) - strlen (path),
+            max_child_name_length = CLAMP ((path_max - 1) - (glong) strlen (path),
                                            0,
                                            max_child_name_length);
         }
     }
 
     return max_child_name_length;
-}
-
-#if !defined (NAUTILUS_OMIT_SELF_CHECK)
-
-void
-nautilus_self_check_file_utilities (void)
-{
 }
 
 void
@@ -1378,6 +988,7 @@ nautilus_ensure_extension_builtins (void)
      * that they will be registered by the time the extension point
      * is iterating over its extensions.
      */
+    g_type_ensure (NAUTILUS_TYPE_NETWORK_DIRECTORY);
     g_type_ensure (NAUTILUS_TYPE_SEARCH_DIRECTORY);
     g_type_ensure (NAUTILUS_TYPE_STARRED_DIRECTORY);
 }
@@ -1398,8 +1009,6 @@ nautilus_ensure_extension_points (void)
     }
 }
 
-#endif /* !NAUTILUS_OMIT_SELF_CHECK */
-
 gboolean
 nautilus_file_can_rename_files (GList *files)
 {
@@ -1417,26 +1026,6 @@ nautilus_file_can_rename_files (GList *files)
     }
 
     return TRUE;
-}
-
-/* Try to get a native file:// URI instead of any other GVFS
- * scheme, for interoperability with apps only handling file:// URIs.
- */
-gchar *
-nautilus_uri_to_native_uri (const gchar *uri)
-{
-    g_autoptr (GFile) file = NULL;
-    g_autofree gchar *path = NULL;
-
-    file = g_file_new_for_uri (uri);
-    path = g_file_get_path (file);
-
-    if (path != NULL)
-    {
-        return g_filename_to_uri (path, NULL, NULL);
-    }
-
-    return NULL;
 }
 
 NautilusQueryRecursive
@@ -1486,4 +1075,57 @@ location_settings_search_get_recursive_for_location (GFile *location)
     }
 
     return recursive;
+}
+
+/* check_schema_available() was copied from GNOME Settings */
+gboolean
+check_schema_available (const gchar *schema_id)
+{
+    GSettingsSchemaSource *source;
+    g_autoptr (GSettingsSchema) schema = NULL;
+
+    if (nautilus_application_is_sandboxed ())
+    {
+        return TRUE;
+    }
+
+    source = g_settings_schema_source_get_default ();
+    if (!source)
+    {
+        return FALSE;
+    }
+
+    schema = g_settings_schema_source_lookup (source, schema_id, TRUE);
+    if (!schema)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+gboolean
+is_external_volume (GVolume *volume)
+{
+    gboolean is_external;
+    GDrive *drive;
+    char *id;
+
+    drive = g_volume_get_drive (volume);
+    id = g_volume_get_identifier (volume, G_VOLUME_IDENTIFIER_KIND_CLASS);
+
+    is_external = g_volume_can_eject (volume);
+
+    /* NULL volume identifier only happens on removable devices */
+    is_external |= !id;
+
+    if (drive)
+    {
+        is_external |= g_drive_is_removable (drive);
+    }
+
+    g_clear_object (&drive);
+    g_free (id);
+
+    return is_external;
 }

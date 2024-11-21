@@ -28,10 +28,9 @@ G_BEGIN_DECLS
 
 G_DECLARE_FINAL_TYPE (NautilusTagManager, nautilus_tag_manager, NAUTILUS, TAG_MANAGER, GObject);
 
+NautilusTagManager* nautilus_tag_manager_new                (void);
+NautilusTagManager* nautilus_tag_manager_new_dummy          (void);
 NautilusTagManager* nautilus_tag_manager_get                (void);
-
-void                nautilus_tag_manager_set_cancellable    (NautilusTagManager *tag_manager,
-                                                             GCancellable *cancellable);
 
 GList*              nautilus_tag_manager_get_starred_files (NautilusTagManager *self);
 
@@ -53,6 +52,9 @@ gboolean            nautilus_tag_manager_file_is_starred   (NautilusTagManager *
 
 gboolean            nautilus_tag_manager_can_star_contents (NautilusTagManager *self,
                                                             GFile              *directory);
+gboolean            nautilus_tag_manager_can_star_location (NautilusTagManager *self,
+                                                            GFile              *directory);
+
 void                nautilus_tag_manager_update_moved_uris  (NautilusTagManager *tag_manager,
                                                              GFile              *src,
                                                              GFile              *dest);

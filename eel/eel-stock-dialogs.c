@@ -22,9 +22,7 @@
 #include <config.h>
 #include "eel-stock-dialogs.h"
 
-#include "eel-glib-extensions.h"
-#include "eel-gtk-extensions.h"
-
+#include <adwaita.h>
 #include <glib/gi18n-lib.h>
 #include <gtk/gtk.h>
 
@@ -48,7 +46,7 @@ typedef struct
     guint timeout_handler_id;
 
     /* Window, once it's created. */
-    GtkDialog *dialog;
+    GtkWidget *dialog;
 
     /* system time (microseconds) when dialog was created */
     gint64 dialog_creation_time;
@@ -102,7 +100,7 @@ timed_wait_delayed_close_timeout_callback (gpointer callback_data)
                                           G_CALLBACK (timed_wait_delayed_close_destroy_dialog_callback),
                                           GUINT_TO_POINTER (handler_id));
 
-    gtk_widget_destroy (GTK_WIDGET (callback_data));
+    gtk_window_destroy (GTK_WINDOW (callback_data));
 
     return FALSE;
 }
@@ -152,7 +150,7 @@ timed_wait_free (TimedWait *wait)
         }
         else
         {
-            gtk_widget_destroy (GTK_WIDGET (wait->dialog));
+            gtk_window_destroy (GTK_WINDOW (wait->dialog));
         }
     }
 
@@ -168,7 +166,7 @@ timed_wait_dialog_destroy_callback (GtkWidget *object,
 
     wait = callback_data;
 
-    g_assert (GTK_DIALOG (object) == wait->dialog);
+    g_assert (object == wait->dialog);
 
     wait->dialog = NULL;
 
@@ -183,49 +181,24 @@ timed_wait_dialog_destroy_callback (GtkWidget *object,
     }
 }
 
-static void
-trash_dialog_response_callback (GtkDialog *dialog,
-                                int        response_id,
-                                TimedWait *wait)
-{
-    gtk_widget_destroy (GTK_WIDGET (dialog));
-}
-
 static gboolean
 timed_wait_callback (gpointer callback_data)
 {
     TimedWait *wait;
-    GtkDialog *dialog;
-    const char *button;
+    GtkWidget *dialog;
 
     wait = callback_data;
 
     /* Put up the timed wait window. */
-    button = wait->cancel_callback != NULL ? _("_Cancel") : ("_OK");
-    dialog = GTK_DIALOG (gtk_message_dialog_new (wait->parent_window,
-                                                 0,
-                                                 GTK_MESSAGE_INFO,
-                                                 GTK_BUTTONS_NONE,
-                                                 NULL));
+    dialog = adw_message_dialog_new (wait->parent_window,
+                                     wait->wait_message,
+                                     _("You can stop this operation by clicking cancel."));
 
-    g_object_set (dialog,
-                  "text", wait->wait_message,
-                  "secondary-text", _("You can stop this operation by clicking cancel."),
-                  NULL);
+    adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog), "cancel", _("_Cancel"));
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "cancel");
 
-    gtk_dialog_add_button (GTK_DIALOG (dialog), button, GTK_RESPONSE_OK);
-    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
-
-    /* The contents are often very small, causing tiny little
-     * dialogs with their titles clipped if you just let gtk
-     * sizing do its thing. This enforces a minimum width to
-     * make it more likely that the title won't be clipped.
-     */
-    gtk_window_set_default_size (GTK_WINDOW (dialog),
-                                 TIMED_WAIT_MINIMUM_DIALOG_WIDTH,
-                                 -1);
     wait->dialog_creation_time = g_get_monotonic_time ();
-    gtk_widget_show (GTK_WIDGET (dialog));
+    gtk_window_present (GTK_WINDOW (dialog));
 
     /* FIXME bugzilla.eazel.com 2441:
      * Could parent here, but it's complicated because we
@@ -239,9 +212,6 @@ timed_wait_callback (gpointer callback_data)
      */
     g_signal_connect (dialog, "destroy",
                       G_CALLBACK (timed_wait_dialog_destroy_callback),
-                      wait);
-    g_signal_connect (dialog, "response",
-                      G_CALLBACK (trash_dialog_response_callback),
                       wait);
 
     wait->timeout_handler_id = 0;
@@ -259,6 +229,7 @@ eel_timed_wait_start_with_duration (int                duration,
 {
     TimedWait *wait;
 
+    g_return_if_fail (cancel_callback != NULL);
     g_return_if_fail (callback_data != NULL);
     g_return_if_fail (wait_message != NULL);
     g_return_if_fail (parent_window == NULL || GTK_IS_WINDOW (parent_window));
@@ -316,224 +287,4 @@ eel_timed_wait_stop (EelCancelCallback cancel_callback,
     g_return_if_fail (wait != NULL);
 
     timed_wait_free (wait);
-}
-
-int
-eel_run_simple_dialog (GtkWidget     *parent,
-                       gboolean       ignore_close_box,
-                       GtkMessageType message_type,
-                       const char    *primary_text,
-                       const char    *secondary_text,
-                       ...)
-{
-    va_list button_title_args;
-    const char *button_title;
-    GtkWidget *dialog;
-    GtkWidget *top_widget, *chosen_parent;
-    int result;
-    int response_id;
-
-    /* Parent it if asked to. */
-    chosen_parent = NULL;
-    if (parent != NULL)
-    {
-        top_widget = gtk_widget_get_toplevel (parent);
-        if (GTK_IS_WINDOW (top_widget))
-        {
-            chosen_parent = top_widget;
-        }
-    }
-
-    /* Create the dialog. */
-    dialog = gtk_message_dialog_new (GTK_WINDOW (chosen_parent),
-                                     0,
-                                     message_type,
-                                     GTK_BUTTONS_NONE,
-                                     NULL);
-
-    g_object_set (dialog,
-                  "text", primary_text,
-                  "secondary-text", secondary_text,
-                  NULL);
-
-    va_start (button_title_args, secondary_text);
-    response_id = 0;
-    while (1)
-    {
-        button_title = va_arg (button_title_args, const char *);
-        if (button_title == NULL)
-        {
-            break;
-        }
-        gtk_dialog_add_button (GTK_DIALOG (dialog), button_title, response_id);
-        gtk_dialog_set_default_response (GTK_DIALOG (dialog), response_id);
-        response_id++;
-    }
-    va_end (button_title_args);
-
-    /* Run it. */
-    gtk_widget_show (dialog);
-    result = gtk_dialog_run (GTK_DIALOG (dialog));
-    while ((result == GTK_RESPONSE_NONE || result == GTK_RESPONSE_DELETE_EVENT) && ignore_close_box)
-    {
-        gtk_widget_show (GTK_WIDGET (dialog));
-        result = gtk_dialog_run (GTK_DIALOG (dialog));
-    }
-    gtk_widget_destroy (dialog);
-
-    return result;
-}
-
-static GtkDialog *
-create_message_dialog (const char     *primary_text,
-                       const char     *secondary_text,
-                       GtkMessageType  type,
-                       GtkButtonsType  buttons_type,
-                       GtkWindow      *parent)
-{
-    GtkWidget *dialog;
-
-    dialog = gtk_message_dialog_new (parent,
-                                     0,
-                                     type,
-                                     buttons_type,
-                                     NULL);
-    if (parent)
-    {
-        gtk_window_set_modal (GTK_WINDOW (dialog), TRUE);
-    }
-
-    g_object_set (dialog,
-                  "text", primary_text,
-                  "secondary-text", secondary_text,
-                  NULL);
-
-    return GTK_DIALOG (dialog);
-}
-
-static GtkDialog *
-show_message_dialog (const char     *primary_text,
-                     const char     *secondary_text,
-                     GtkMessageType  type,
-                     GtkButtonsType  buttons_type,
-                     GtkWindow      *parent)
-{
-    GtkDialog *dialog;
-
-    dialog = create_message_dialog (primary_text, secondary_text, type,
-                                    buttons_type, parent);
-    gtk_widget_show (GTK_WIDGET (dialog));
-
-    g_signal_connect (dialog, "response",
-                      G_CALLBACK (gtk_widget_destroy), NULL);
-
-    return dialog;
-}
-
-static GtkDialog *
-show_ok_dialog (const char     *primary_text,
-                const char     *secondary_text,
-                GtkMessageType  type,
-                GtkWindow      *parent)
-{
-    GtkDialog *dialog;
-
-    dialog = show_message_dialog (primary_text, secondary_text, type,
-                                  GTK_BUTTONS_OK, parent);
-    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
-
-    return dialog;
-}
-
-GtkDialog *
-eel_show_info_dialog (const char *primary_text,
-                      const char *secondary_text,
-                      GtkWindow  *parent)
-{
-    return show_ok_dialog (primary_text,
-                           secondary_text,
-                           GTK_MESSAGE_INFO, parent);
-}
-
-GtkDialog *
-eel_show_warning_dialog (const char *primary_text,
-                         const char *secondary_text,
-                         GtkWindow  *parent)
-{
-    return show_ok_dialog (primary_text,
-                           secondary_text,
-                           GTK_MESSAGE_WARNING, parent);
-}
-
-
-GtkDialog *
-eel_show_error_dialog (const char *primary_text,
-                       const char *secondary_text,
-                       GtkWindow  *parent)
-{
-    return show_ok_dialog (primary_text,
-                           secondary_text,
-                           GTK_MESSAGE_ERROR, parent);
-}
-
-/**
- * eel_show_yes_no_dialog:
- *
- * Create and show a dialog asking a question with two choices.
- * The caller needs to set up any necessary callbacks
- * for the buttons. Use eel_create_question_dialog instead
- * if any visual changes need to be made, to avoid flashiness.
- * @question: The text of the question.
- * @yes_label: The label of the "yes" button.
- * @no_label: The label of the "no" button.
- * @parent: The parent window for this dialog.
- */
-GtkDialog *
-eel_show_yes_no_dialog (const char *primary_text,
-                        const char *secondary_text,
-                        const char *yes_label,
-                        const char *no_label,
-                        GtkWindow  *parent)
-{
-    GtkDialog *dialog = NULL;
-    dialog = eel_create_question_dialog (primary_text,
-                                         secondary_text,
-                                         no_label, GTK_RESPONSE_CANCEL,
-                                         yes_label, GTK_RESPONSE_YES,
-                                         GTK_WINDOW (parent));
-    gtk_widget_show (GTK_WIDGET (dialog));
-    return dialog;
-}
-
-/**
- * eel_create_question_dialog:
- *
- * Create a dialog asking a question with at least two choices.
- * The caller needs to set up any necessary callbacks
- * for the buttons. The dialog is not yet shown, so that the
- * caller can add additional buttons or make other visual changes
- * without causing flashiness.
- * @question: The text of the question.
- * @answer_0: The label of the leftmost button (index 0)
- * @answer_1: The label of the 2nd-to-leftmost button (index 1)
- * @parent: The parent window for this dialog.
- */
-GtkDialog *
-eel_create_question_dialog (const char *primary_text,
-                            const char *secondary_text,
-                            const char *answer_1,
-                            int         response_1,
-                            const char *answer_2,
-                            int         response_2,
-                            GtkWindow  *parent)
-{
-    GtkDialog *dialog;
-
-    dialog = create_message_dialog (primary_text,
-                                    secondary_text,
-                                    GTK_MESSAGE_QUESTION,
-                                    GTK_BUTTONS_NONE,
-                                    parent);
-    gtk_dialog_add_buttons (dialog, answer_1, response_1, answer_2, response_2, NULL);
-    return dialog;
 }

@@ -19,6 +19,7 @@
  *
  *  Authors: John Sullivan <sullivan@eazel.com>
  */
+#define G_LOG_DOMAIN "nautilus-error-reporting"
 
 #include <config.h>
 
@@ -27,13 +28,9 @@
 #include <string.h>
 #include <glib/gi18n.h>
 #include "nautilus-file.h"
-#include <eel/eel-string.h>
 #include <eel/eel-stock-dialogs.h>
 
 #include "nautilus-ui-utilities.h"
-
-#define DEBUG_FLAG NAUTILUS_DEBUG_DIRECTORY_VIEW
-#include "nautilus-debug.h"
 
 #define NEW_NAME_TAG "Nautilus: new name"
 
@@ -44,13 +41,13 @@ static void finish_rename (NautilusFile *file,
 static char *
 get_truncated_name_for_file (NautilusFile *file)
 {
-    g_autofree char *file_name = NULL;
+    const char *file_name;
 
     g_assert (NAUTILUS_IS_FILE (file));
 
     file_name = nautilus_file_get_display_name (file);
 
-    return eel_str_middle_truncate (file_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
+    return g_utf8_truncate_middle (file_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
 }
 
 void
@@ -98,8 +95,8 @@ nautilus_report_error_loading_directory (NautilusFile *file,
             {
                 g_autofree char *truncated_error_message = NULL;
 
-                truncated_error_message = eel_str_middle_truncate (error->message,
-                                                                   MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
+                truncated_error_message = g_utf8_truncate_middle (error->message,
+                                                                  MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
 
                 message = g_strdup_printf (_("Sorry, could not display all the contents of “%s”: %s"), truncated_name,
                                            truncated_error_message);
@@ -155,8 +152,8 @@ nautilus_report_error_setting_group (NautilusFile *file,
     {
         g_autofree char *truncated_error_message = NULL;
 
-        truncated_error_message = eel_str_middle_truncate (error->message,
-                                                           MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
+        truncated_error_message = g_utf8_truncate_middle (error->message,
+                                                          MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
 
         /* We should invent decent error messages for every case we actually experience. */
         g_warning ("Hit unhandled case %s:%d in nautilus_report_error_setting_group",
@@ -186,8 +183,8 @@ nautilus_report_error_setting_owner (NautilusFile *file,
 
     truncated_name = get_truncated_name_for_file (file);
 
-    truncated_error_message = eel_str_middle_truncate (error->message,
-                                                       MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
+    truncated_error_message = g_utf8_truncate_middle (error->message,
+                                                      MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
     message = g_strdup_printf (_("Sorry, could not change the owner of “%s”: %s"),
                                truncated_name, truncated_error_message);
 
@@ -210,8 +207,8 @@ nautilus_report_error_setting_permissions (NautilusFile *file,
 
     truncated_name = get_truncated_name_for_file (file);
 
-    truncated_error_message = eel_str_middle_truncate (error->message,
-                                                       MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
+    truncated_error_message = g_utf8_truncate_middle (error->message,
+                                                      MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
     message = g_strdup_printf (_("Sorry, could not change the permissions of “%s”: %s"),
                                truncated_name, truncated_error_message);
 
@@ -242,7 +239,7 @@ nautilus_report_error_renaming_file (NautilusFile *file,
      * in them won't get wrapped, and can create insanely wide dialog boxes.
      */
     truncated_old_name = get_truncated_name_for_file (file);
-    truncated_new_name = eel_str_middle_truncate (new_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
+    truncated_new_name = g_utf8_truncate_middle (new_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
 
     if (error->domain == G_IO_ERROR)
     {
@@ -271,15 +268,22 @@ nautilus_report_error_renaming_file (NautilusFile *file,
             }
             break;
 
+            case G_IO_ERROR_INVALID_ARGUMENT:
             case G_IO_ERROR_INVALID_FILENAME:
             {
-                if (strchr (new_name, '/') != NULL)
+                const char *invalid_chars = FAT_FORBIDDEN_CHARACTERS;
+
+                for (guint i = 0; i < strlen (invalid_chars); i++)
                 {
-                    message = g_strdup_printf (_("The name “%s” is not valid because it contains the character “/”. "
-                                                 "Please use a different name."),
-                                               truncated_new_name);
+                    if (strchr (new_name, invalid_chars[i]) != NULL)
+                    {
+                        message = g_strdup_printf (_("The name “%s” is not valid because it contains the character “%c”. "
+                                                     "Please use a different name."),
+                                                   truncated_new_name, invalid_chars[i]);
+                        break;
+                    }
                 }
-                else
+                if (message == NULL)
                 {
                     message = g_strdup_printf (_("The name “%s” is not valid. "
                                                  "Please use a different name."),
@@ -296,6 +300,15 @@ nautilus_report_error_renaming_file (NautilusFile *file,
             }
             break;
 
+            case G_IO_ERROR_BUSY:
+            {
+                message = g_strdup_printf (_("Could not rename “%s” because a process is using it."
+                                             " If it's open in another application, close it before"
+                                             " renaming it."),
+                                           truncated_old_name);
+            }
+            break;
+
             default:
             {
             }
@@ -307,8 +320,8 @@ nautilus_report_error_renaming_file (NautilusFile *file,
     {
         g_autofree char *truncated_error_message = NULL;
 
-        truncated_error_message = eel_str_middle_truncate (error->message,
-                                                           MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
+        truncated_error_message = g_utf8_truncate_middle (error->message,
+                                                          MAXIMUM_DISPLAYED_ERROR_MESSAGE_LENGTH);
 
         /* We should invent decent error messages for every case we actually experience. */
         g_warning ("Hit unhandled case %s:%d in nautilus_report_error_renaming_file",
@@ -348,8 +361,11 @@ rename_callback (NautilusFile *file,
     {
         if (!(error->domain == G_IO_ERROR && error->code == G_IO_ERROR_CANCELLED))
         {
+            GtkApplication *app = GTK_APPLICATION (g_application_get_default ());
+            GtkWindow *window = gtk_application_get_active_window (app);
+
             /* If rename failed, notify the user. */
-            nautilus_report_error_renaming_file (file, data->name, error, NULL);
+            nautilus_report_error_renaming_file (file, data->name, error, window);
         }
         else
         {
@@ -427,7 +443,7 @@ nautilus_rename_file (NautilusFile                  *file,
 
     /* Start the timed wait to cancel the rename. */
     truncated_old_name = get_truncated_name_for_file (file);
-    truncated_new_name = eel_str_middle_truncate (new_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
+    truncated_new_name = g_utf8_truncate_middle (new_name, MAXIMUM_DISPLAYED_FILE_NAME_LENGTH);
     wait_message = g_strdup_printf (_("Renaming “%s” to “%s”."),
                                     truncated_old_name,
                                     truncated_new_name);
@@ -435,7 +451,7 @@ nautilus_rename_file (NautilusFile                  *file,
                           NULL);     /* FIXME bugzilla.gnome.org 42395: Parent this? */
 
     uri = nautilus_file_get_uri (file);
-    DEBUG ("Renaming file %s to %s", uri, new_name);
+    g_debug ("Renaming file %s to %s", uri, new_name);
 
     /* Start the rename. */
     nautilus_file_rename (file, new_name,

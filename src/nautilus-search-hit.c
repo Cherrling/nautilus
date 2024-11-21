@@ -16,6 +16,7 @@
  * see <http://www.gnu.org/licenses/>.
  *
  */
+#define G_LOG_DOMAIN "nautilus-search-hit"
 
 #include <config.h>
 
@@ -24,8 +25,6 @@
 
 #include "nautilus-search-hit.h"
 #include "nautilus-query.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH_HIT
-#include "nautilus-debug.h"
 
 struct _NautilusSearchHit
 {
@@ -35,6 +34,7 @@ struct _NautilusSearchHit
 
     GDateTime *modification_time;
     GDateTime *access_time;
+    GDateTime *creation_time;
     gdouble fts_rank;
     gchar *fts_snippet;
 
@@ -47,6 +47,7 @@ enum
     PROP_RELEVANCE,
     PROP_MODIFICATION_TIME,
     PROP_ACCESS_TIME,
+    PROP_CREATION_TIME,
     PROP_FTS_RANK,
     PROP_FTS_SNIPPET,
     NUM_PROPERTIES
@@ -58,9 +59,9 @@ void
 nautilus_search_hit_compute_scores (NautilusSearchHit *hit,
                                     NautilusQuery     *query)
 {
-    GDateTime *now;
-    GFile *query_location;
+    g_autoptr (GFile) query_location = NULL;
     GFile *hit_location;
+    guint dir_count = 0;
     GTimeSpan m_diff = G_MAXINT64;
     GTimeSpan a_diff = G_MAXINT64;
     GTimeSpan t_diff = G_MAXINT64;
@@ -71,10 +72,10 @@ nautilus_search_hit_compute_scores (NautilusSearchHit *hit,
     query_location = nautilus_query_get_location (query);
     hit_location = g_file_new_for_uri (hit->uri);
 
-    if (g_file_has_prefix (hit_location, query_location))
+    if (query_location != NULL &&
+        g_file_has_prefix (hit_location, query_location))
     {
         GFile *parent, *location;
-        guint dir_count = 0;
 
         parent = g_file_get_parent (hit_location);
 
@@ -94,41 +95,47 @@ nautilus_search_hit_compute_scores (NautilusSearchHit *hit,
     }
     g_object_unref (hit_location);
 
-    now = g_date_time_new_now_local ();
-    if (hit->modification_time != NULL)
+    /* Recency bonus is useful for recursive search, but unwanted for results
+     * from the current folder, which should always sort by filename match,
+     * which makes prefix matches sort first. */
+    if (dir_count != 0)
     {
-        m_diff = g_date_time_difference (now, hit->modification_time);
-    }
-    if (hit->access_time != NULL)
-    {
-        a_diff = g_date_time_difference (now, hit->access_time);
-    }
-    m_diff /= G_TIME_SPAN_DAY;
-    a_diff /= G_TIME_SPAN_DAY;
-    t_diff = MIN (m_diff, a_diff);
-    if (t_diff > 90)
-    {
-        recent_bonus = 0.0;
-    }
-    else if (t_diff > 30)
-    {
-        recent_bonus = 10.0;
-    }
-    else if (t_diff > 14)
-    {
-        recent_bonus = 30.0;
-    }
-    else if (t_diff > 7)
-    {
-        recent_bonus = 50.0;
-    }
-    else if (t_diff > 1)
-    {
-        recent_bonus = 70.0;
-    }
-    else
-    {
-        recent_bonus = 100.0;
+        g_autoptr (GDateTime) now = g_date_time_new_now_local ();
+        if (hit->modification_time != NULL)
+        {
+            m_diff = g_date_time_difference (now, hit->modification_time);
+        }
+        if (hit->access_time != NULL)
+        {
+            a_diff = g_date_time_difference (now, hit->access_time);
+        }
+        m_diff /= G_TIME_SPAN_DAY;
+        a_diff /= G_TIME_SPAN_DAY;
+        t_diff = MIN (m_diff, a_diff);
+        if (t_diff > 90)
+        {
+            recent_bonus = 0.0;
+        }
+        else if (t_diff > 30)
+        {
+            recent_bonus = 10.0;
+        }
+        else if (t_diff > 14)
+        {
+            recent_bonus = 30.0;
+        }
+        else if (t_diff > 7)
+        {
+            recent_bonus = 50.0;
+        }
+        else if (t_diff > 1)
+        {
+            recent_bonus = 70.0;
+        }
+        else
+        {
+            recent_bonus = 100.0;
+        }
     }
 
     if (hit->fts_rank > 0)
@@ -141,11 +148,8 @@ nautilus_search_hit_compute_scores (NautilusSearchHit *hit,
     }
 
     hit->relevance = recent_bonus + proximity_bonus + match_bonus;
-    DEBUG ("Hit %s computed relevance %.2f (%.2f + %.2f + %.2f)", hit->uri, hit->relevance,
-           proximity_bonus, recent_bonus, match_bonus);
-
-    g_date_time_unref (now);
-    g_object_unref (query_location);
+    g_debug ("Hit %s computed relevance %.2f (%.2f + %.2f + %.2f)", hit->uri, hit->relevance,
+             proximity_bonus, recent_bonus, match_bonus);
 }
 
 const char *
@@ -218,6 +222,24 @@ nautilus_search_hit_set_access_time (NautilusSearchHit *hit,
 }
 
 void
+nautilus_search_hit_set_creation_time (NautilusSearchHit *hit,
+                                       GDateTime         *date)
+{
+    if (hit->creation_time != NULL)
+    {
+        g_date_time_unref (hit->creation_time);
+    }
+    if (date != NULL)
+    {
+        hit->creation_time = g_date_time_ref (date);
+    }
+    else
+    {
+        hit->creation_time = NULL;
+    }
+}
+
+void
 nautilus_search_hit_set_fts_snippet (NautilusSearchHit *hit,
                                      const gchar       *snippet)
 {
@@ -265,6 +287,12 @@ nautilus_search_hit_set_property (GObject      *object,
         case PROP_ACCESS_TIME:
         {
             nautilus_search_hit_set_access_time (hit, g_value_get_boxed (value));
+        }
+        break;
+
+        case PROP_CREATION_TIME:
+        {
+            nautilus_search_hit_set_creation_time (hit, g_value_get_boxed (value));
         }
         break;
 
@@ -325,6 +353,12 @@ nautilus_search_hit_get_property (GObject    *object,
         }
         break;
 
+        case PROP_CREATION_TIME:
+        {
+            g_value_set_boxed (value, hit->creation_time);
+        }
+        break;
+
         case PROP_FTS_SNIPPET:
         {
             g_value_set_string (value, hit->fts_snippet);
@@ -353,6 +387,10 @@ nautilus_search_hit_finalize (GObject *object)
     if (hit->modification_time != NULL)
     {
         g_date_time_unref (hit->modification_time);
+    }
+    if (hit->creation_time != NULL)
+    {
+        g_date_time_unref (hit->creation_time);
     }
 
     g_free (hit->fts_snippet);
@@ -392,6 +430,14 @@ nautilus_search_hit_class_init (NautilusSearchHitClass *class)
                                                          "access time",
                                                          G_TYPE_DATE_TIME,
                                                          G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
+
+    g_object_class_install_property (object_class,
+                                     PROP_CREATION_TIME,
+                                     g_param_spec_boxed ("creation-time",
+                                                         "creation time",
+                                                         "creation time",
+                                                         G_TYPE_DATE_TIME,
+                                                         G_PARAM_READWRITE | G_PARAM_CONSTRUCT));
     g_object_class_install_property (object_class,
                                      PROP_RELEVANCE,
                                      g_param_spec_double ("relevance",
@@ -420,9 +466,6 @@ nautilus_search_hit_class_init (NautilusSearchHitClass *class)
 static void
 nautilus_search_hit_init (NautilusSearchHit *hit)
 {
-    hit = G_TYPE_INSTANCE_GET_PRIVATE (hit,
-                                       NAUTILUS_TYPE_SEARCH_HIT,
-                                       NautilusSearchHit);
 }
 
 NautilusSearchHit *

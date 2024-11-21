@@ -1,3 +1,597 @@
+Major changes in 47.0
+=====================
+* Enhancements
+ - Show new folder button in Open Folder(s) modes (Corey Berla)
+ - Persist window size for file chooser (Corey Berla)
+* Bugfixes:
+ - Fix grammar error (Khalid Abu Shawarib)
+ - Fix build error (Jami Kettunen)
+ - Escape toast button mnemonics (Khalid Abu Shawarib)
+ * File chooser fixes:
+  - Don't show undo button when suggested name doesn't exist (Corey Berla)
+  - Show filter name more consistently (Corey Berla)
+  - Stop crashing when using "Open Item Location" (Corey Berla)
+  - Fix issue where new folder button disappears (Corey Berla)
+  - Fix flat dropdown styles (Alice Mikhaylenko)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 47.rc
+=====================
+* Enhancements
+- Polish the file chooser (António Fernandes)
+- Implement file chooser "choices" menu (Corey Berla)
+- Allow extracting bzip2 tar files (Khalid Abu Shawarib)
+- Allow dropping items into the file chooser (Corey Berla)
+- Add the background menu to the file chooser (Corey Berla)
+- Allow vertical scrolling in the pathbar (Liam Rust)
+- Activate the accept button by default in file chooser (Dylan McCall)
+* Bugfixes:
+- Fix various file chooser crashes (Corey Berla)
+- Don't hide file chooser filters with long filenames or in narrow mode (Corey Berla)
+- Make sure the pathbar always shows the current folder (Corey Berla)
+- Fix overlapping filename widget in file chooser (Corey Berla)
+- Make nautilus previewer work between the main window and file chooser (António Fernandes)
+- Various fixes for file chooser paths and save locations (Corey Berla)
+- Set focus correctly in file chooser (Corey Berla)
+- Allow unselecting an item in file chooser (Corey Berla)
+- Add a tooltip to the network address bar button (Automeris naranja)
+- Disallow conventional DnD into the pathbar in file chooser mode (Corey Berla)
+- Don't overflow window in file chooser (Corey Berla)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 47.beta
+=====================
+* Enhancements
+- Implement file chooser portal and introduce file chooser ui (António Fernandes)
+- Redesign and modernize the compression dialog (Automeris naranja)
+- Modernize the new folder dialog (Automeris naranja, António Fernandes)
+- Replace Search Banner with Search Info Popover (Anuraag Reddy Patllollu)
+- Redesign "Other Types" search (Khalid Abu Shawarib)
+- Port to new adwaita widgets (Automeris naranja, Khalid Abu Shawarib, Peter Eisenmann)
+- Update emblems with symbolics (Sam Hewitt, Khalid Abu Shawarib, Peter Eisenmann)
+* Bugfixes:
+- Use correct path for email (Peter Eisenmann)
+- File chooser bug fixes (Corey Berla)
+- Disable bookmarking the network view (Corey Berla)
+- Change files view accent to grey (Alice Mikhaylenko)
+- Fix dragging on touch devices (Lukas Swierzy, Gary Li)
+- Misc bugfixes (Khalid Abu Shawarib, Peter Eisenmann, António Fernandes, Corey Berla)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 47.alpha
+=====================
+* Enhancements
+ - Add the Network view (António Fernandes, Allan Day)
+ - Show xdg dirs in sidebar as regular (removable) bookmarks (António Fernandes)
+ - Show sidebar bookmarks before mounts (António Fernandes)
+ - Remove "Other Locations" and show mounts directly on the sidebar (António Fernandes)
+ - Improve view performance (Khalid Abu Shawarib)
+ - Use new adw views (Automeris naranja)
+ - Improve internal NautilusFile performance (Peter Eisenmann)
+ - Improve ui for progress indicator (Peter Eisenmann)
+ - Improve ui to floating bar (Sam Hewitt, piegames)
+ - Allow staring from the context menu (José Guilherme)
+ - Redesign trash dialog (Anuraag Reddy Patllollu, Allan Day)
+ - Allow Scripts in flatpak (Anuraag Reddy Patllollu)
+ - Open mounts in original tab instead of focused tab (Gary Li)
+ - Allow simultaneous mounting (Khalid Abu Shawarib)
+* Bugfixes:
+  - Create archive with Enter on Compress dialog (Lukáš Tyrychtr)
+  - Accessibility fixes (Automeris naranja, Sabri Ünal)
+  - Move focus correctly when item is removed (Khalid Abu Shawarib)
+  - Don't reset permissions when copying from a non-isofs readonly filesystem (Fina Wilke)
+  - Open correct panel in GNOME Settings for trash settings (Khalid Abu Shawarib)
+  - Disable paste in Trash, Recent, and Starred (Jonathan Lin)
+  - Fix error when passing invalid location to portals (Khalid Abu Shawarib)
+  - Fix memory leaks (Khalid Abu Shawarib, António Fernandes)
+  - Call shutdown() on modules (Corey Berla)
+  - Don't show banners in global search (Khalid Abu Shawarib)
+  - Prevent a crash (Khalid Abu Shawarib, Gary Li)
+  - Keep correct file list order in a DnD (Khalid Abu Shawarib)
+  - Don't display future dates as "Today" or "Yesterday" (Grey Nicholson)
+  - Prevent freeze (Peter Eisenmann)
+  - Fix broken sort order when switching views (Gary Li)
+  - Don't irreversibly hide sidebar with touch gesture (Khalid Abu Shawarib)
+  - Don't unnecessarily re-set selection in search (Gary Li)
+  - Don't scale up images in properties preview (Khalid Abu Shawarib)
+  - Actually drop wayland export handles (António Fernandes)
+  - Fix potentially incorrect file operation (Khalid Abu Shawarib)
+  - Batch rename fix tags, and allow illegal characters (Anuraag Reddy Patllollu)
+  - Allow xdp to fail (Balló György)
+  - Fix typo (Alexandre Franke)
+* Cleanups
+  - Use property styling for adw rows (Automeris naranja, Anton Snigirev)
+  - Code cleanup (Khalid Abu Shawarib, Peter Eisenmann, Corey Berla, António Fernandes)
+  - Significant refactoring and cleanup to prepare to Nautilus as a file chooser (António Fernandes)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 46.0
+=====================
+* Bugfixes:
+  - Remove char limit on size label in properties dialog (Khalid Abu Shawarib)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 46.rc
+========================
+* Enhancements
+  - Adjust empty status page and progress tooltip strings (Allan Day, Khalid Abu Shawarib)
+  - Add input hints and purpose properties to entries (Khalid Abu Shawarib)
+  - Refine operations hover background (Sam Hewitt, António Fernandes)
+* Bugfixes:
+  - Position loop mounts correctly in the sidebar (António Fernandes)
+  - Fix internationalization issues (Khalid Abu Shawarib, Peter Eisenmann)
+  - Revert crashes-causing multi-file properties performance optimization (Peter Eisenmann)
+  - Reestablish location signals if location change failed (Corey Berla)
+  - Fix regression which disallowed dropping files on empty folders (Corey Berla, António Fernandes)
+* Cleanups
+  - Remove architecture-sensitive duplicate filename unit test (Peter Eisenmann, Jeremy Bicha)
+  - Refine Appstream metainfo (Sophie Herold, Alexandre Franke)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 46.beta
+========================
+* Postponed
+  - The network view from 46.alpha.1 was deemed to require more work
+* Enhancements
+  - Added a global search mode (António Fernandes)
+  - Use 'text entry' cursor on pathbar hover (Corey Berla)
+  - Add drop shadow to file property dialog icons (kramo)
+  - Improve progress info icons and tooltips (Bharat Tyagi, Sam Hewitt)
+* Bugfixes:
+  - Avoid crashes with column chooser (Peter Eisenmann)
+  - Avoid crash when navigating back to same folder (António Fernandes)
+  - Avoid infinite loop on file creation naming conflict (Corey Berla)
+  - Fix displaying parent folder of multi-files (Anton Snigirev)
+  - Clear location entry on editing of internal locations (Peter Eisenmann)
+  - Ensure search's clear button is hidden when empty (António Fernandes)
+  - Hide search popover after opening a dialog (Khalid Abu Shawarib)
+  - Correctly open empty folders from search (António Fernandes)
+  - Don't reload view only to change selection (António Fernandes)
+  - Use smaller icons in progress indicator (António Fernandes, Sam Hewitt)
+  - Fix various leaks (Khalid Abu Shawarib, António Fernandes)
+  - Added extra tentacles to confuse AI-generated blogs (Via Matrix)
+* Cleanups
+  - Made various string HIG compatible (Bart Gravendeel, Automeris naranja)
+  - Modernize column chooser widgetry (Automeris naranja)
+  - Detect potfile errors via CI (Corey Berla)
+  - Replace deprecated GTK point computing functions (N.Pranav Krishna)
+
+Major changes in 46.alpha.1
+=======================
+* Enhancements
+  - Views can be switched without a folder reload (António Fernandes)
+  - Operations are listed in the bottom of the sidebar (Corey Berla, António Fernandes, Allan Day)
+  - Network view replaces Other Locations (António Fernandes, Allan Day)
+  - Mounted drives are shown in the sidebar (António Fernandes)
+  - Selected files are recorded in back and forward history (António Fernandes)
+  - Subfolder loading indication (António Fernandes)
+  - Various view performance improvements (António Fernandes)
+  - Improved performance of multi-file properties dialog (Khalid Abu Shawarib)
+* Bugfixes:
+  - Correctly prioritize thumbnails for non-alphabetical sort order (Corey Berla)
+  - Notify view item name changes for accessibility (Corey Berla, António Fernandes)
+  - Open real folder for documents in Recent from Properties (Anton Snigirev)
+  - Pattern match (Ctrl+S) all expanded list view directories (António Fernandes)
+  - Display sampling frequency in kHz with thousand separators (Hariharan D)
+  - Treat markdown files as text documents in search (Hariharan D)
+  - Improve UI text capitalization and mnemonics (Automeris naranja)
+  - Fix tab tooltip texts for markup and search (Corey Berla)
+  - Fix extension linkage with C++ (Khalid Abu Shawarib)
+  - Add a tooltip to the star button (Lukáš Tyrychtr)
+  - Show correct shortcut for Redo on the menu (Divyansh Jain)
+  - Prevent use-after-free with mount and stop (António Fernandes)
+  - Improve virtual files handling  (António Fernandes)
+  - Fix various view-related bugs, leaks and warnings (António Fernandes)
+* Cleanups:
+  - Significant restructuring of view architecture (António Fernandes)
+  - Remove dead code in views and css styles (António Fernandes)
+  - Update man page, remove documentation for removed self-check functionality (Corey Berla)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 46.alpha.0
+=======================
+* Enhancements
+  - Confirm password when creating protected ZIP archives (Eric Daigle)
+  - Make custom folder icon feature discoverable (Khalid Abu Shawarib)
+  - Make URI entry discoverable (Alynx Zhou, Barnabás Pőcze)
+  - Allow changing owner/group and any permissions under admin:/// (António Fernandes)
+  - Add detailed date and time format option (Ondrej Holy, Peter Eisenmann)
+  - Detect copy/move over 4GiB file limit on FAT (Corey Berla)
+  - Give feedback on completion of quick operations (António Fernandes)
+  - New-style banners, unstar animation, and other visual refinements (Peter Eisenmann, Automeris naranja)
+  - Allow Alt+Down to revert more than one Alt+Up (vmkul)
+  - Close overlaid sidebar on location change (Khalid Abu Shawarib)
+* Bugfixes:
+  - Don't skip files in deep count/size (António Fernandes)
+  - Don't move files around as thumbnails load (Corey Berla)
+  - Reveal highlighted file without delay  (Corey Berla)
+  - Stop crashing in various situations (Sebastian Keller, António Fernandes, Corey Berla, Khalid Abu Shawarib)
+  - Resolve UI text inconsistencies (Automeris naranja, getsnoopy, kramo, Khalid Abu Shawarib, Ondrej Holy, Matthijs Velsink)
+  - Fix memory leaks, template disposal, and warnings (Khalid Abu Shawarib)
+  - Fix interface problems in Properties (Peter Eisenmann, António Fernandes, Khalid Abu Shawarib)
+  - Don't keep viewing unmounted locations (Ondrej Holy, António Fernandes, Khalid Abu Shawarib)
+  - Refined appdata (Sabri Ünal, António Fernandes)
+  - Resolve wrong scroll positioning bugs (Gary Li, António Fernandes)
+  - Fix automatic file duplicate naming (Peter Eisenmann)
+  - Properly reorder bookmarks by drag and drop (Khalid Abu Shawarib)
+  - Set current modification time on file created from templates (Khalid Abu Shawarib)
+  - Fix missing/wrong mime type icons (António Fernandes)
+  - Don't reload on autofs timeout (António Fernandes)
+* Cleanups
+  - Remove obsolete profiling, custom debug logging, and self-checking (Peter Eisenmann, Khalid Abu Shawarib)
+  - Streamline and expand tests (Khalid Abu Shawarib, Peter Eisenmann)
+  - Reduce usage of GtkDialog and other deprecated API (Khalid Abu Shawarib, Peter Eisenmann)
+  - Replace custom switch row with AdwSwitchRow (Óscar Fernández Díaz)
+  - Drop obsolete code (Peter Eisenmann, António Fernandes, Corey Berla)
+  - Reduce unnecessary string copies (Peter Eisenmann)
+  - Unify numbered filename apendix handling (Peter Eisenmann, Khalid Abu Shawarib)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 45.rc
+=====================
+
+* Avoid slowness when many files are selected (Corey Berla, António Fernandes)
+* Make tooltip and menu for Preferences back button not empty (Domenico Iezzi)
+* Revert patch which could cause loss of data (Corey Berla, Ondrej Holy)
+* Fix sizing and styling of Visible Columns (António Fernandes)
+* Change sidebar title (António Fernandes)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 45.beta2
+=====================
+
+* Feature enhancements:
+  - New "Search Everywhere" buttons to expand search scope (Allan Day, António Fernandes)
+  - Modern full-height sidebar layout (Marco Melorio, António Fernandes)
+  - Refined sidebar sizing and folding treshold (Tobias Bernard, Corey Berla, António Fernandes)
+* Performance enhancements:
+  - Flickerless transition into and from search (António Fernandes)
+  - Accelerated generation of multiple thumbnail (Khalid Abu Shawarib, Corey Berla)
+  - Avoid DBus-activating other apps when starting (Corey Berla)
+* Bugfixes:
+  - Delete partially copied file on cancelled copy (Corey Berla)
+  - Don't restrict shell search results do %HOME (António Fernandes)
+  - Don't open trash on drag hover (Jakob Landbo)
+  - Fix multiple search bugs (Khalid Abu Shawarib, Peter Eisenmann, António Fernandes)
+  - Avoid crashes on search (Khalid Abu Shawarib, Corey Berla)
+  - Fix "sort after rename" regression (António Fernandes)
+  - Fix various styling issues (Alice Mikhaylenko)
+  - Don't allow to resize Properties too small (Automeris naranja)
+* Maintenance:
+  - Disable deprecation warnings, fix other warnings (Peter Eisenmann, Luciano Santos)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 45.beta
+=====================
+
+* Enhancements:
+  - Use new navigation view and flat headerbar for Properties (Peter Eisenmann, António Fernandes)
+  - Don't switch view mode when searching (António Fernandes)
+  - Don't add search to history stack (António Fernandes)
+  - Optimize view performance when selecting or removing many items (Corey Berla)
+* Bugfixes:
+  - Prefent mixed-language date and time labels (António Fernandes)
+  - Multiple starred files view bugfixes (Corey Berla, António Fernandes)
+  - Context menu capitalization (Alessandro Bono)
+* Maintenance:
+  - Replace some eel API with direct GLib API (Peter Eisenmann)
+  - Cleanup URI scheme checking (Peter Eisenmann, António Fernandes)
+  - Use newer async API for creating thumbnails (Khalid Abu Shawarib)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 45.alpha
+=====================
+
+* Enhancements:
+  - Boost search performance (Carlos Garnacho, António Fernandes)
+  - Redesign Visible Columns options, allow changing default columns (Corey Berla, Peter Eisenmann)
+  - Support dropping images from web pages (Corey Berla)
+  - Show bytes size as tooltip for folder properties too (Raihan)
+  - Indicate starred files in grid view (Gary Li)
+  - Support skipping errors while creating compressed archives (Gary Li)
+  - Make date and time format more consistent (Allan Day, Venkata Kesav Venna, Ondrej Holy)
+  - Make Ctrl+F refocus search bar, not cancel search (Khalid Abu Shawarib)
+  - Adapt sidebar width to window width, and use a breakpoint for adaptiveness (Christopher Davis)
+  - Allow moving keyboard focus within list rows (Corey Berla)
+  - Replace GtkComboBox with GtkDropDown (Corey Berla)
+  - Simplify Keyboard Shortcuts window definition (Sabri Ünal)
+  - Improve file opening experience while sandboxed (António Fernandes)
+* Bugfixes:
+  - Fix results ordering, and other search bugs (Eric Daigle, António Fernandes, Carlos Garnacho, Khalid Abu Shawarib)
+  - Fix tooltips, a11y labels, and i18n issues (sunflowerskater, Khalid Abu Shawarib, Automeris naranja, Sabri Ünal)
+  - Fix sushi integration bugs (Corey Berla)
+  - Don't hide incompletely deleted folders (Corey Berla)
+  - Show file renamed to hidden again on undo (Corey Berla)
+  - Don't state file was "deleted" if it was moved to trash (Sayan Bhattacharjee)
+  - Fix rubberband range behavior on list view (António Fernandes)
+  - Respect modifiers when dropping on tabs; disable broken tab drop target on X11 (Corey Berla)
+  - Fix bugs when reloading on autofs timeouts (Ondrej Holy)
+  - Don't offer to format volumes which cannot be formatted, e.g. MTP (Ondrej Holy)
+  - Fix multiple crashes (Corey Berla, António Fernandes)
+  - Fix multiple leaks (Khalid Abu Shawarib, António Fernandes)
+* Maintenance:
+  - Rename default branch to 'main' (Peter Eisenmann)
+  - Make libcloudproviders dependency optional again (Ondrej Holy)
+  - Improve reproducibility (Khem Raj)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 44.1
+=====================
+* Resolve some crashes (Peter Eisenmann, Gary Li, António Fernandes)
+* Visual bugfixes:
+  - Tweak style colors in view items (António Fernandes, Sam Hewitt, Peter Eisenmann)
+  - Show custom emblems from extensions again (António Fernandes)
+  - Relayout SELinux property row (Peter Eisenmann)
+  - Flip switches correctly (Peter Eisenmann)
+* Other bugfixes:
+  - Disable some actions when not useful (Sayan Bhattacharjee, Khalid Abu Shawarib)
+  - Fix dead characters handling in batch rename dialog (Gary Li)
+  - Fix crashes when rapidly opening and closing windows (Gary Li)
+  - Prevent location change when autofs timeouts (Ondrej Holy)
+  - Fix issues with translations in libadwaita widgets (Peter Eisenmann)
+  - Drop workarounds for fixed GTK bugs (Corey Berla)
+  - Fix other issues (Carlos Garnacho, Sebastian Keller, António Fernandes, Corey Berla, Peter Eisenmann, Ondrej Holy)
+* Enhancements:
+  - Dismiss toast on undo (Corey Berla)
+  - Select right items after some operations (Corey Berla)
+  - Paste into expanded folders (Corey Berla)
+  - Allow extraction of .tar.zst and .zstd archives (Ondrej Holy)
+  - Performance optimization (Sebastian Keller)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 44.0
+=====================
+* Bugfixes:
+  - Prevent rubberband selection instead of drag and drop (Ondrej Holy)
+  - Fix critical errors with recent GLib versions (Ondrej Holy)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 44.rc
+======================
+* Bugfixes:
+  - Fix crashes caused by extra free call (Corey Berla)
+  - Fix file order after renaming (Corey Berla)
+  - Fix libadwaita include path (Barnabás Pőcze)
+  - Fix handling of missing dates from Tracker (Pablo Correa Gomez)
+  - Cache clock format setting (Corey Berla)
+  - Try to own dbus name at the correct time (Ondrej Holy)
+  - Exchange mismatched error messages (Ondrej Holy)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 44.beta
+========================
+* Enhacements:
+  - Make various appdata and desktop file improvements (Christopher Davis)
+  - Make rubberband to have rounded corners (sunflowerskater)
+  - Make several documentation improvements (Corey Berla)
+* Bugfixes:
+  - Fix crashes caused by inverted g_assert condition (Ondrej Holy)
+  - Fix various drag and drop issues (Corey Berla, Peter Eisenmann)
+  - Fix several memory leaks (Corey Berla)
+  - Fix various three expander issues (António Fernandes, Corey Berla)
+  - Export FileManager1 iface from dbus_register vfunc (Ondrej Holy)
+  - Fix other issues (Corey Berla, Ondrej Holy, Jeremy Bicha, Athul Iddya)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 44.alpha
+=========================
+* Enhancements:
+  - Allow expanding subfolders in the list (António Fernandes, Corey Berla)
+  - Enrich tab context menus (Corey Berla)
+  - Allow pasting image data into new PNG file (Corey Berla)
+  - Use pregenerated thumbnails when available, e.g. MTP (Ondrej Holy)
+  - Add shortcut for Preferences (Sabri Ünal)
+  - Show full filename in grid, using tooltips (António Fernandes)
+  - Reintroduce 64px icon size for grid view (António Fernandes)
+  - Remove upper limit on thumbnailing file size range (Peter Eisenmann)
+  - Reword "application" to "app" (sunflowerskater)
+  - Other papercuts (António Fernandes, Hari Rana, sunflowerskater)
+* Other bugfixes:
+  - Avoid many crashes (Corey Berla, Gary li, António Fernandes, Aleksandar Dezelin)
+  - Fix and improve autorun support (Will Thompson, António Fernandes)
+  - Fix some drag-and-drop issues (Corey Berla, Liu Yuyang)
+  - Fix some view focus and selection issues (Corey Berla, António Fernandes)
+  - Fix properties extensions bugs (António Fernandes)
+  - Fix memory leaks (Ignacy Kuchciński, António Fernandes)
+  - Fix building on certain cases (Leonardo Hernández)
+  - Fix bugs with file operations (Corey Berla, Gary Li, Bastien Nocera)
+  - Resolve some performance issues (Corey Berla, Jeff Fortin Tam)
+  - Resolve stuttering scrolling (Corey Berla)
+  - Save and restore sort column (Corey Berla)
+  - Launch search from shell correctly (Corey Berla)
+  - Reimplement view navigation from the previewer (António Fernandes)
+  - Stop showing � in the type on Properties (Aleksandar Dezelin)
+  - Stop blocking on the tracker connection (Corey Berla)
+  - Add missing trailing ellipsis and mnemonics in menus (Gotam Gorabh, Peter Eisenmann)
+  - Allow opening current view in new tab from sidebar (Colin Kinloch)
+  - Share settings with GTK4 filechooser (Colin Sane)
+  - Don't allow hiding name column (Corey Berla)
+* Code cleanups
+  - Drop workarounds for resolved GTK4 issues (Corey Berla)
+  - Use fewer deprecated GTK 4 API (Corey Berla, Peter Eisenmann)
+  - Don't use deprecated GLib API (Corey Berla)
+  - Remove unused obsolete code (Peter Eisenmann, Benjamin Otte, Corey Berla, Antóino Fernandes, Sabri Ünal)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 43.0
+=========================
+* Bugfixes
+  - Open first search result with Enter, as before (Corey Berla)
+  - Don't freeze when opening media storage (Corey Berla)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 43.rc
+=========================
+* Resolving regressions from the GTK 3 to 4 switch:
+  - Restore accessible labels for view items (Corey Berla)
+  - HiDPI icons and thumbnails (António Fernandes)
+  - Restore transient location entry behavior (António Fernandes)
+  - Restore spacebar shortcut to trigger sushi file previewer (António Fernandes)
+  - Restore ability to create new file from dropped text (Corey Berla)
+  - Restore ability to duplicate via DND + Ctrl (Corey Berla)
+* Drag-and-drop enhancements:
+  - Allow dropping files into Starred to star them (Corey Berla)
+  - Prevent "open on hover" while moving pointer (Corey Berla, António Fernandes)
+* Menu enhancements:
+  - Add menu item to remove files from Starred list (Corey Berla)
+  - Don't activate menu button when clicking folder name (António Fernandes)
+  - Don't offer "Properties" and "Add to Bookmarks" actions when they don't make sense (Eric Daigle, Corey Berla, António Fernandes)
+* Properties enhancements
+  - Wrap long filename words in Properties (anarchistcat)
+  - Refine properties for root directory (Corey Berla)
+  - Show error state for extensions properties (António Fernandes)
+* General enhancements
+  - Redesign trash infobar (Ignacy Kuchciński, Sam Hewitt)
+  - Add tooltips to every headerbar control (Ronen Margolin)
+  - Update and modernize libnautilus-extension documentation (Jan Tojnar)
+  - Update appdata screenshots (Christopher Davis)
+* Bugfixes
+  - Fix various app chooser issues (Corey Berla)
+  - Fix various batch rename dialog issues (Corey Berla)
+  - Fix Highcontrast styles (Ignacy Kuchciński, António Fernandes)
+  - Fix focus misbehaviours in the new views (Corey Berla)
+  - Don't show URI escape codes in tooltips (Antonio Teixeira)
+  - Show sharing infobar in gnome-user-share's fallback location (Corey Berla)
+  - Fix icon size in file conflict dialog (António Fernandes)
+  - Fix operations indicator animation (António Fernandes)
+  - Mark missing translatable strings (Sabri Ünal)
+  - Fix various memory leaks (Ignacy Kuchciński, Corey Berla)
+  - Fix compilation errors (Jeremy Bicha, Ondrey Holy, Timo)
+* Translation updates (GNOME Translation Project contributors)
+
+Major changes in 43.beta.1
+==========================
+* Restore view options tooltip (António Fernandes)
+* Mark new files for translation (Piotr Drąg)
+* Look for extensions in their new installation directory (Jeremy Bicha)
+
+Major changes in 43.beta
+=========================
+* Adapting main window elements to smaller sizes (Christopher Davis);
+  - Make sidebar foldable.
+  - Split toolbar contorls into top and bottom toolbars at small sizes.
+* Restoring Disks integration (Corey Berla):
+  - Open storage unit in Disks from Properties.
+  - Format with Disks from the sidebar context menu.
+* Absorbing features from core plug-ins (Corey Brela):
+  - Provide infobar for Public folder, instead of gnome-user-share
+  - Provide context menu action to open folders in Console.
+  - Replace nautilus-send-to extension with Email portal.
+* Remodeling plug-ins
+  - List installed extensions plug-ins in About. (Corey Berla)
+  - Implement new Properties API and port Image and Audio/Video (António Fernades)
+  - Remove GTK-dependent API from libnautilus-extension (António Fernandes)
+  - Bump libnautilus-extension versions.
+* Improving search UI design
+  - Use modern design patterns for type filter chooser (António Fernandes)
+  - Elaborate FTS snippets and place them in a container (António Fernandes, Alan Day)
+* Modernizing Properties window
+  - Implement new "pages and rows" design (Peter Eisenmann, António Fernandes)
+  - Move ability to set default app into Open With dialog (António Fernandes, Corey Berla)
+* Reorganizing context menus (Allan Day, António Fernandes).
+* Refining view visual styles
+  - Saturate selection colors (Allan Day, Alexander Mikhay)
+  - Add icon shadows (Jakub Steiner)
+  - Refine layout of column editor dialog. (Allan Day, António Fernandes)
+* Using more modern widgetry
+  - Use AdwTabBar for detatchable tabs (Alexander Mikhaylenko, António Fernandes, Christopher Davis)
+  - Use AdwEmptyState for empty folder views (Christopher Davis, António Fernandes).
+  - Use AdwMessageDialog instead of GtkMessage. (Christopher Davis, Ondrej Holy)
+* Resolving regressions from the GTK 3 to 4 switch:
+  - Restore Accessibility relations (Corey Berla).
+  - Restore location entry suggestions (Corey Berla).
+  - Restore libcloudproviders integration (Ondrej Holy)
+* Opening new tab with middle click on next and forward buttons (Corey Berla)
+* Miscellaneous bugfixes (multiple contributos)
+* Translation updates (GNOME Translation Project contributors)
+
+Leftover known regressions in 43.beta
+  - Lacks HiDPI icons
+  - Lacks attention-grabbing animation on operations button
+
+Major changes in 43.alpha
+=========================
+* Resolving regressions from the GTK 3 to 4 switch:
+  - Reintroduce clipboard with GTK 4 (António Fernandes)
+  - Reintroduce Drag’n’Drop with GTK 4 (Corey Berla, António Fernandes)
+  - Reintroduce emblems independently of file icon (António Fernandes)
+  - Reintroduce filter search tags with GTK 4 (António Fernandes)
+  - Port audio-video-properties extension to GTK 4 (Corey Berla)
+  - Restore sidebar features from GTK 3 (Corey Berla)
+  - Fix other regressions from the GTK 3 to 4 switch (António Fernandes, Noëlle,Óscar Fernández Díaz, Ondrej Holy, Corey Berla, Ákos Horváth, Corey Berla)
+* Modernizing view widgets
+  - Port files grid view mode to GtkGridView (António Fernandes)
+  - Reimplement files list view mode with GtkColumnView (António Fernandes)
+  - Add checkerboard background for thumbnails with transparency (Utkarsh Gandhi, António Fernandes)
+* Enhancing menus:
+  - New menu item to open current folder in another application (António Fernandes)
+  - Add menu item to copy current path to clipboard (Utkarsh Gandhi)
+  - Redesign zoom controls as icon size controls (António Fernandes)
+  - Context menu bugfixes (Owen D'Aprile, Ignacy Kuchciński)
+  - Add context menu item to show Properties in Other Locations (Corey Berla)
+  - Improve support for context menus on touchscreens
+  - Show extensions in templates names (Roshan R)
+  - Show sort menu options in list virw mode (António Fernandes)
+  - Allow sorting in recent and search (António Fernandes)
+* Other enhancements:
+  - Use better in-app notifications with AdwToast (Christopher Davis)
+  - Modernize "About" with AdwAboutWindow (Christopher Davis)
+  - Refine pathbar appearance (Utkarsh Gandhi, António Fernandes)
+  - Label '/' with the OS name (StarShot)
+  - Keyboard shortcuts overlay updates (Tero Gusto)
+* Miscellaneous bugfixes:
+  - Search engine bugfixes (Ondrej Holy)
+  - Floating satus bar bugfixes (Ignacy Kuchciński)
+  - Fix popover crashes (Corey Berla)
+  - Allow copying to a ramfs (Alister Sanders)
+  - Stop computing remote folders item count when didabled (Corey Berla)
+  - Fix batch rename for files with the same name in search results (Corey Berla)
+  - Don't trigger keyboard shortcuts ouside their intended scope (Vanadiae)
+* Maintenance work
+  - Adapt to thumbnails API changes (Michael Catanzaro)
+  - Depend on libportal and drop wallpaper fallback setting (Jeremy Bicha, António Fernandes)
+  - Modernize build with new meson features (Maximiliano)
+  - Bump extensions library version (António Fernandes)
+* Translation updates (GNOME Translation Project contributors)
+
+Leftover known regressions in 43.alpha
+  - Lacks HiDPI icons
+  - Lacks attention-grabbing animation on operations button
+
+Major changes in 42.alpha
+=========================
+* Improve design of the file renaming UI (Peter Eisenmann, Allan Day)
+* Improve visuals of the file conflict UI (Joshua Lee)
+* Use GtkBuilder UI definitions for more components (António Fernandes, Apoorv Sachan)
+* Fix "Move to"/"Copy to" from Starred (DillyPickly)
+* Improve disposition of shell search provider (Marco Trevisan)
+* Sort by subtype within type (rajat jain)
+* Allow searching by creation time (Nishit Patel)
+* Replace deprecated gexiv2 functions (Nishal Kulkarni)
+* Fix extension API introspection annotations (Aaron Jacobs)
+* Expand on extension API documentation (Aaron Jacobs)
+* Add compressed archives to Recent files (Manny)
+* Preparations for GTK 4 switch (Ernestas Kulik, António Fernandes, Matt Jakeman, Álvaro Costa, Suhaas Joshi)
+* Complete the GtkFlowBox-based grid view (António Fernandes)
+* Remove EelCanvas-based grid view (António Fernandes)
+* Improve design of the path bar (António Fernandes)
+* Fix geographical coordinates displayed format (Michael von Gunten)
+* Port to GTK 4 (António Fernandes)
+* Fix some GTK 4 switch regressions/warnings (António Fernandes, Ondrej Holy)
+* Translation updates (GNOME Translation Project contributors)
+
+Known major regressions in 42.alpha
+  - Lacks Drag-and-Drop interatcion
+  - Lacks clipboard interaction
+  - Lacks HiDPI icons
+  - Lacks MIME-type icons in list view
+  - Has poor performance for large directories in grid view
+  - Lacks attention-grabbing animation on operations button.
+  - Doesn't display emblems
+  - Doesn't display file filters as tags
+  - Lacks "Format" context menu item in sidebar
+  - Lacks Audio/Video properties page
+
 Major changes in 41.1
 =====================
 * Cache Scripts and New Document menus to avoid lags (António Fernandes)

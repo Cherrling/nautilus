@@ -24,19 +24,20 @@
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <gtk/gtk.h>
+
+#include "nautilus-types.h"
 
 G_BEGIN_DECLS
 
-void nautilus_previewer_call_show_file (const gchar *uri,
-                                        const gchar *window_handle,
-                                        guint        xid,
-					gboolean     close_if_already_visible);
+void nautilus_previewer_call_show_file (const gchar        *uri,
+                                        NautilusWindowSlot *window,
+                                        gboolean            close_if_already_visible);
 void nautilus_previewer_call_close     (void);
 
 gboolean nautilus_previewer_is_visible (void);
 
-guint nautilus_previewer_connect_selection_event (GDBusConnection *connection);
-void  nautilus_previewer_disconnect_selection_event (GDBusConnection *connection,
-                                                     guint            event_id);
+void  nautilus_previewer_setup         (void);
+void  nautilus_previewer_teardown      (GDBusConnection *connection);
 
 G_END_DECLS

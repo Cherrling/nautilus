@@ -37,14 +37,11 @@
 char *   nautilus_get_user_directory                 (void);
 char *   nautilus_get_home_directory_uri             (void);
 gboolean nautilus_is_root_directory                  (GFile *dir);
+gboolean nautilus_is_root_for_scheme                 (GFile      *dir,
+                                                      const char *scheme);
 gboolean nautilus_is_home_directory                  (GFile *dir);
 gboolean nautilus_is_home_directory_file             (GFile *dir,
 						      const char *filename);
-gboolean nautilus_is_search_directory                (GFile *dir);
-gboolean nautilus_is_recent_directory                (GFile *dir);
-gboolean nautilus_is_starred_directory              (GFile *dir);
-gboolean nautilus_is_trash_directory                 (GFile *dir);
-gboolean nautilus_is_other_locations_directory       (GFile *dir);
 GMount * nautilus_get_mounted_mount_for_root         (GFile *location);
 
 gboolean nautilus_should_use_templates_directory     (void);
@@ -57,11 +54,6 @@ gboolean nautilus_is_file_roller_installed           (void);
 
 GIcon *  nautilus_special_directory_get_icon         (GUserDirectory directory);
 GIcon *  nautilus_special_directory_get_symbolic_icon (GUserDirectory directory);
-
-gboolean nautilus_uri_parse                          (const char  *uri,
-						      char       **host,
-						      guint16     *port,
-						      char       **userinfo);
 
 /* Return an allocated file location that is guranteed to be unique, but
  * tries to make the location name readable to users.
@@ -91,8 +83,6 @@ char * get_message_for_two_content_types (const char * const *content_types);
 gboolean should_handle_content_type (const char *content_type);
 gboolean should_handle_content_types (const char * const *content_type);
 
-gboolean nautilus_file_selection_equal (GList *selection_a, GList *selection_b);
-
 /**
  * nautilus_get_common_filename_prefix:
  * @file_list: set of files (NautilusFile *)
@@ -106,14 +96,14 @@ char * nautilus_get_common_filename_prefix (GList *file_list,
 
 /**
  * nautilus_get_common_filename_prefix_from_filenames:
- * @filename_list: set of file names (char *)
+ * @filenames: an array of filenames
  * @min_required_len: the minimum number of characters required in the prefix
  *
  * Returns: the common filename prefix for a set of filenames, or NULL if
  * there isn't a common prefix of length min_required_len
  */
-char * nautilus_get_common_filename_prefix_from_filenames (GList *filename_list,
-                                                           int    min_required_len);
+char * nautilus_get_common_filename_prefix_from_filenames (const char * const *filenames,
+                                                           int                 min_required_len);
 
 /**
  * nautilus_get_max_child_name_for_location:
@@ -137,7 +127,8 @@ gboolean nautilus_file_can_rename_files (GList *files);
 
 GList * nautilus_file_list_from_uri_list (GList *uris);
 
-gchar * nautilus_uri_to_native_uri (const gchar *uri);
-
 NautilusQueryRecursive location_settings_search_get_recursive (void);
 NautilusQueryRecursive location_settings_search_get_recursive_for_location (GFile *location);
+
+gboolean check_schema_available (const gchar *schema_id);
+gboolean is_external_volume (GVolume *volume);

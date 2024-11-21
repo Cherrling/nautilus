@@ -23,7 +23,6 @@
 #include <config.h>
 #include "nautilus-module.h"
 
-#include <eel/eel-debug.h>
 #include <gmodule.h>
 
 #define NAUTILUS_TYPE_MODULE            (nautilus_module_get_type ())
@@ -56,21 +55,11 @@ struct _NautilusModuleClass
 };
 
 static GList *module_objects = NULL;
+static GList *installed_modules = NULL;
 
 static GType nautilus_module_get_type (void);
 
 G_DEFINE_TYPE (NautilusModule, nautilus_module, G_TYPE_TYPE_MODULE);
-
-static gboolean
-module_pulls_in_orbit (GModule *module)
-{
-    gpointer symbol;
-    gboolean res;
-
-    res = g_module_symbol (module, "ORBit_realloc_tcval", &symbol);
-
-    return res;
-}
 
 static gboolean
 nautilus_module_load (GTypeModule *gmodule)
@@ -85,17 +74,6 @@ nautilus_module_load (GTypeModule *gmodule)
     {
         g_warning ("%s", g_module_error ());
         return FALSE;
-    }
-
-    /* ORBit installs atexit() handlers, which would get unloaded together
-     * with the module now that the main process doesn't depend on GConf anymore,
-     * causing nautilus to sefgault at exit.
-     * If we detect that an extension would pull in ORBit, we make the
-     * module resident to prevent that.
-     */
-    if (module_pulls_in_orbit (module->library))
-    {
-        g_module_make_resident (module->library);
     }
 
     if (!g_module_symbol (module->library,
@@ -114,25 +92,10 @@ nautilus_module_load (GTypeModule *gmodule)
         return FALSE;
     }
 
+    g_module_make_resident (module->library);
     module->initialize (gmodule);
 
     return TRUE;
-}
-
-static void
-nautilus_module_unload (GTypeModule *gmodule)
-{
-    NautilusModule *module;
-
-    module = NAUTILUS_MODULE (gmodule);
-
-    module->shutdown ();
-
-    g_module_close (module->library);
-
-    module->initialize = NULL;
-    module->shutdown = NULL;
-    module->list_types = NULL;
 }
 
 static void
@@ -157,7 +120,6 @@ nautilus_module_class_init (NautilusModuleClass *class)
 {
     G_OBJECT_CLASS (class)->finalize = nautilus_module_finalize;
     G_TYPE_MODULE_CLASS (class)->load = nautilus_module_load;
-    G_TYPE_MODULE_CLASS (class)->unload = nautilus_module_unload;
 }
 
 static void
@@ -186,7 +148,7 @@ add_module_objects (NautilusModule *module)
     }
 }
 
-static NautilusModule *
+static void
 nautilus_module_load_file (const char *filename)
 {
     NautilusModule *module;
@@ -197,14 +159,30 @@ nautilus_module_load_file (const char *filename)
     if (g_type_module_use (G_TYPE_MODULE (module)))
     {
         add_module_objects (module);
-        g_type_module_unuse (G_TYPE_MODULE (module));
-        return module;
+        installed_modules = g_list_prepend (installed_modules, module);
+        return;
     }
     else
     {
         g_object_unref (module);
-        return NULL;
     }
+}
+
+char *
+nautilus_module_get_installed_module_names (void)
+{
+    g_autoptr (GStrvBuilder) builder = g_strv_builder_new ();
+    g_auto (GStrv) names = NULL;
+
+    for (GList *l = installed_modules; l != NULL; l = l->next)
+    {
+        NautilusModule *module = l->data;
+        g_strv_builder_add (builder, module->path);
+    }
+
+    names = g_strv_builder_end (builder);
+
+    return g_strjoinv ("\n", names);
 }
 
 static void
@@ -236,8 +214,8 @@ load_module_dir (const char *dirname)
     }
 }
 
-static void
-free_module_objects (void)
+void
+nautilus_module_teardown (void)
 {
     GList *l, *next;
 
@@ -248,20 +226,35 @@ free_module_objects (void)
     }
 
     g_list_free (module_objects);
+
+    for (l = installed_modules; l != NULL; l = l->next)
+    {
+        NautilusModule *module = l->data;
+        module->shutdown ();
+    }
+
+    /* We can't actually free the modules themselves. */
+    g_clear_pointer (&installed_modules, g_list_free);
 }
 
 void
 nautilus_module_setup (void)
 {
     static gboolean initialized = FALSE;
+    const gchar *disable_plugins;
+
+    disable_plugins = g_getenv ("NAUTILUS_DISABLE_PLUGINS");
+    if (g_strcmp0 (disable_plugins, "TRUE") == 0)
+    {
+        /* Troublingshooting envvar is set to disable extensions */
+        return;
+    }
 
     if (!initialized)
     {
         initialized = TRUE;
 
         load_module_dir (NAUTILUS_EXTENSIONDIR);
-
-        eel_debug_call_at_shutdown (free_module_objects);
     }
 }
 

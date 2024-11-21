@@ -1,3 +1,317 @@
+nautilus (47.0-2) unstable; urgency=medium
+
+  * Remove obsolete Suggests: eog, nautilus-extension-brasero (Closes: #1085303)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Mon, 28 Oct 2024 17:22:53 +0100
+
+nautilus (47.0-1) unstable; urgency=medium
+
+  [ Alessandro Astone ]
+  * New upstream release
+    - Fix filechooser crash when searching (LP: #2078721)
+
+  [ Jeremy Bícha ]
+  * Set ${gir:Provides} for libnautilus-extension-dev
+  * Release to unstable
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Mon, 16 Sep 2024 06:50:41 -0400
+
+nautilus (47~beta.1-1) experimental; urgency=medium
+
+  * New upstream release
+    - Support being used as xdg-desktop-portal-gnome filechooser
+      (LP: #1175608, LP: #2023044)
+  * Bump minimum GTK4, libadwaita & libportal
+  * Remove reproducibility patch: applied in new release
+  * Add revert patches to avoid switch from tracker to localsearch for now
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Tue, 13 Aug 2024 09:37:19 -0400
+
+nautilus (46.2-3) unstable; urgency=medium
+
+  * Bump minimum GTK4 to 4.13.6
+  * Remove patches that reverted changes that required GTK4 4.13.6
+  * Bump Standards-Version to 4.7.0
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 01 Aug 2024 16:14:10 -0400
+
+nautilus (46.2-2) unstable; urgency=medium
+
+  * Cherry-pick reproducible builds fix (Closes: #1076368)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Sat, 20 Jul 2024 17:58:21 -0600
+
+nautilus (46.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump minimum glib, gtk4, libadwaita, libgexiv2
+  * Revert 2 commits that require gtk4 4.13
+  * Drop obsolete Build-Depends: libgtk-3-common
+  * Drop obsolete Build-Depends: libxml2-dev
+  * Drop meson fatal warnings patch: obsolete
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Sun, 14 Jul 2024 08:20:53 -0400
+
+nautilus (45.2.1-4) unstable; urgency=medium
+
+  * Team upload
+
+  [ Helmut Grohne ]
+  * Fix FTBFS when nocheck build option is specified (Closes: #1061466)
+
+  [ Jeremy Bícha ]
+  * salsa-ci: Disable reprotest
+
+ -- Simon McVittie <smcv@debian.org>  Fri, 26 Jan 2024 15:14:00 +0000
+
+nautilus (45.2.1-3) unstable; urgency=medium
+
+  * Update tracker test patch to really skip the test failure
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 11 Jan 2024 20:39:25 -0500
+
+nautilus (45.2.1-2) unstable; urgency=medium
+
+  * Print more logs to get more debugging information for #1050733
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 11 Jan 2024 19:07:37 -0500
+
+nautilus (45.2.1-1) unstable; urgency=medium
+
+  * New upstream release (LP: #2048892)
+  * Stop using debian/control.in and dh_gnome_clean
+  * Add patch to mark tracker build test as failing (Mitigates #1050733)
+  * Drop recent changes to debian/rules related to the tracker test issue
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 11 Jan 2024 16:47:47 -0500
+
+nautilus (45.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump gexiv2 depency to 0.14.2
+
+ -- Nathan Pratta Teodosio <nathan.teodosio@canonical.com>  Tue, 24 Oct 2023 09:35:42 +0200
+
+nautilus (45.0-2) unstable; urgency=medium
+
+  * Set XDG_RUNTIME_DIR to try to fix the tracker build test
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 27 Sep 2023 09:59:49 -0400
+
+nautilus (45.0-1) unstable; urgency=medium
+
+  * New upstream translations release
+  * debian/rules Set $HOME and unset some related env variables
+    to hopefully fix the tracker build test (Closes: #1050733)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 27 Sep 2023 08:42:57 -0400
+
+nautilus (45~rc-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Tue, 05 Sep 2023 11:14:22 -0400
+
+nautilus (45~beta2-1) unstable; urgency=medium
+
+  * New upstream release
+  * release to unstable
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Mon, 28 Aug 2023 07:26:46 -0400
+
+nautilus (45~beta-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/control.in: Bump minimum glib, GTK4, and libadwaita
+  * Don't enable libcloudproviders on Ubuntu
+  * Drop 4 patches applied in new release
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 11 Aug 2023 06:48:24 -0400
+
+nautilus (44.2.1-2) unstable; urgency=medium
+
+  * Release to unstable
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 20 Jul 2023 13:23:37 -0400
+
+nautilus (44.2.1-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/control.in: Bump minimum gtk4 to 4.10.4
+  * Revert the reverting of a bugfix that requires gtk4 4.10.4
+  * Cherry-pick 3 fixes from the gnome-44 branch
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Fri, 09 Jun 2023 14:16:06 -0400
+
+nautilus (44.2-1) experimental; urgency=medium
+
+  * Team upload
+
+  [ Amin Bandali ]
+  * New upstream release (Closes: #1034880)
+    - Fix crashes with expandable folders and on Other Locations (Corey
+      Berla) (https://gitlab.gnome.org/GNOME/nautilus/-/issues/2882)
+    - Avoid inconsistent search states (Khalid Abu Shawarib)
+      (https://gitlab.gnome.org/GNOME/nautilus/-/issues/2875)
+    - Prevent lingering tracker cursors (Carlos Garnacho)
+      (https://gitlab.gnome.org/GNOME/nautilus/-/issues/2557)
+    - Fix rubberband range behavior on list view (António Fernandes)
+      (https://gitlab.gnome.org/GNOME/nautilus/-/issues/2974)
+
+  [ Jeremy Bicha ]
+  * debian/control.in: Depend on eject (Closes: #1035538)
+
+ -- Amin Bandali <bandali@ubuntu.com>  Mon, 29 May 2023 16:39:43 -0400
+
+nautilus (44.1-1) experimental; urgency=medium
+
+  * Team upload
+
+  [ Jarred Wilson ]
+  * New upstream release
+  * debian/control.in:
+    - libgtk-4-dev to 4.10.3
+    - libadwaita-1-dev to 1.3.0
+    - libgnome-autotar-0-dev to 0.4.4
+
+  [ Laurent Bigonville ]
+  * debian/control.in
+    - Drop Suggests against nautilus-sendto
+
+ -- Jarred Wilson <jarred.wilson@canonical.com>  Mon, 15 May 2023 16:48:52 -0400
+
+nautilus (44.0-1) experimental; urgency=medium
+
+  * Team upload
+  * New upstream release
+
+ -- Amin Bandali <bandali@ubuntu.com>  Mon, 27 Mar 2023 14:19:56 -0400
+
+nautilus (44~rc-1) experimental; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 07 Mar 2023 13:58:45 -0500
+
+nautilus (44~beta-1) experimental; urgency=medium
+
+  * New upstream release
+    - Restores "Expandable Folders in List View" feature (LP: #1995412)
+      (Closes: #1031110)
+  * debian/control.in: Bump minimum gtk4 to 4.9.1 & libadwaita to 1.3~alpha
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 16 Feb 2023 15:18:31 -0500
+
+nautilus (43.2-1) unstable; urgency=medium
+
+  * New upstream release (LP: #2002575)
+    - Reintroduce the 67% (64px) zoom level for grid view
+  * Update standards version to 4.6.2, no changes needed
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 11 Jan 2023 15:37:05 -0500
+
+nautilus (43.1-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 06 Dec 2022 16:05:49 -0500
+
+nautilus (43.0-1) unstable; urgency=medium
+
+  * New upstream release
+  * Release to unstable
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Sun, 18 Sep 2022 07:02:39 -0400
+
+nautilus (43~rc-2) experimental; urgency=medium
+
+  [ Simon McVittie ]
+  * Replace transitional libfontconfig1-dev with libfontconfig-dev
+
+  [ Jeremy Bicha ]
+  * debian/control.in: Drop unneeded Breaks that made nautilus uninstallable
+    (Closes: #1019315)
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Wed, 07 Sep 2022 08:06:59 -0400
+
+nautilus (43~rc-1) experimental; urgency=medium
+
+  * New upstream release
+  * debian/control.in: Bump minimum gtk4 to 4.7.2
+  * Use gi-docgen to build docs
+  * Drop 32-bit build patch: applied in new release
+  * Add Breaks for nautilus extensions we are removing
+    because they are incompatible with Nautilus 43
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Tue, 06 Sep 2022 11:30:43 -0400
+
+nautilus (43~beta.1-2) experimental; urgency=medium
+
+  * Cherry-pick patch to fix build on 32-bit architectures
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 11 Aug 2022 04:47:46 -0400
+
+nautilus (43~beta.1-1) experimental; urgency=medium
+
+  * New upstream release
+  * Rename libnautilus-extension-1a to libnautilus-extension4 to match soname
+  * Rename gir1.2-nautilus-3.0 to gir1.2-nautilus-4.0 to match version bump
+  * debian/control.in: Update dependencies for switch to gtk4
+  * debian/control.in: Build-Depend on libcloudproviders-dev
+  * Drop gnome-desktop patch: applied in new release
+  * Refresh patches
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 08 Aug 2022 12:06:10 -0400
+
+nautilus (42.2-2) unstable; urgency=medium
+
+  * Cherry-pick patch to fix build with gnome-desktop 43
+  * debian/control.in: Bump minimum gnome-desktop to 43
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 08 Aug 2022 11:13:18 -0400
+
+nautilus (42.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump Standards-Version to 4.6.1
+  * Stop disabling the libportal "set as background" feature.
+    It is no longer optional for nautilus 43 (LP: #1932485)
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 27 May 2022 15:16:37 -0400
+
+nautilus (42.1.1-1) unstable; urgency=medium
+
+  * New upstream release (LP: #1970788)
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Thu, 28 Apr 2022 14:14:47 -0400
+
+nautilus (42.0-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Mon, 21 Mar 2022 09:36:54 -0400
+
+nautilus (42~rc-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Wed, 09 Mar 2022 13:39:12 -0500
+
+nautilus (42~beta-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/control.in: Bump minimum libhandy and libgexiv2
+  * Add patch to revert a commit that introduced a build test failure.
+    Thanks to Seb Bacher for identifying the commit.
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Wed, 23 Feb 2022 07:48:55 -0500
+
+nautilus (41.2-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jeremy Bicha <jbicha@debian.org>  Sun, 16 Jan 2022 13:14:13 -0500
+
 nautilus (41.1-1) unstable; urgency=medium
 
   [ Jeremy Bicha ]

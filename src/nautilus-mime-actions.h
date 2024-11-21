@@ -23,7 +23,6 @@
 #pragma once
 
 #include <gio/gio.h>
-#include <glib/gi18n.h>
 #include <gtk/gtk.h>
 
 #include "nautilus-types.h"
@@ -31,7 +30,6 @@
 NautilusFileAttributes nautilus_mime_actions_get_required_file_attributes (void);
 
 GAppInfo *             nautilus_mime_get_default_application_for_file     (NautilusFile            *file);
-GList *                nautilus_mime_get_applications_for_file            (NautilusFile            *file);
 
 GAppInfo *             nautilus_mime_get_default_application_for_files    (GList                   *files);
 
@@ -39,16 +37,16 @@ gboolean               nautilus_mime_file_extracts                        (Nauti
 gboolean               nautilus_mime_file_opens_in_external_app           (NautilusFile            *file);
 gboolean               nautilus_mime_file_launches                        (NautilusFile            *file);
 void                   nautilus_mime_activate_files                       (GtkWindow               *parent_window,
-									   NautilusWindowSlot      *slot,
-									   GList                   *files,
-									   const char              *launch_directory,
-									   NautilusWindowOpenFlags  flags,
-									   gboolean                 user_confirmation);
+									   NautilusWindowSlot *slot,
+									   GList              *files,
+									   const char         *launch_directory,
+									   NautilusOpenFlags   flags,
+									   gboolean            user_confirmation);
 void                   nautilus_mime_activate_file                        (GtkWindow               *parent_window,
-									   NautilusWindowSlot      *slot_info,
-									   NautilusFile            *file,
-									   const char              *launch_directory,
-									   NautilusWindowOpenFlags  flags);
-gint                   nautilus_mime_types_get_number_of_groups           (void);
-const gchar*           nautilus_mime_types_group_get_name                 (gint                     group_index);
-GPtrArray*             nautilus_mime_types_group_get_mimetypes            (gint                     group_index);
+									   NautilusWindowSlot *slot_info,
+									   NautilusFile       *file,
+									   const char         *launch_directory,
+									   NautilusOpenFlags   flags);
+guint                  nautilus_mime_types_get_number_of_groups           (void);
+const gchar*           nautilus_mime_types_group_get_name                 (guint                    group_index);
+GPtrArray*             nautilus_mime_types_group_get_mimetypes            (guint                    group_index);

@@ -36,12 +36,6 @@ G_BEGIN_DECLS
 #define NAUTILUS_PREFERENCES_MOUSE_FORWARD_BUTTON		"mouse-forward-button"
 #define NAUTILUS_PREFERENCES_MOUSE_BACK_BUTTON			"mouse-back-button"
 
-typedef enum
-{
-	NAUTILUS_NEW_TAB_POSITION_AFTER_CURRENT_TAB,
-	NAUTILUS_NEW_TAB_POSITION_END,
-} NautilusNewTabPosition;
-
 /* Single/Double click preference  */
 #define NAUTILUS_PREFERENCES_CLICK_POLICY			"click-policy"
 
@@ -57,10 +51,10 @@ typedef enum
 #define NAUTILUS_PREFERENCES_ALWAYS_USE_LOCATION_ENTRY		"always-use-location-entry"
 
 /* Which views should be displayed for new windows */
-#define NAUTILUS_WINDOW_STATE_START_WITH_SIDEBAR               "start-with-sidebar"
 #define NAUTILUS_WINDOW_STATE_INITIAL_SIZE			"initial-size"
 #define NAUTILUS_WINDOW_STATE_MAXIMIZED				"maximized"
-#define NAUTILUS_WINDOW_STATE_SIDEBAR_WIDTH			"sidebar-width"
+
+#define NAUTILUS_WINDOW_STATE_INITIAL_SIZE_FILE_CHOOSER         "initial-size-file-chooser"
 
 /* Sorting order */
 #define NAUTILUS_PREFERENCES_SORT_DIRECTORIES_FIRST		"sort-directories-first"
@@ -84,14 +78,8 @@ typedef enum
 /* Icon View */
 #define NAUTILUS_PREFERENCES_ICON_VIEW_DEFAULT_ZOOM_LEVEL		"default-zoom-level"
 
-/* Experimental views */
-#define NAUTILUS_PREFERENCES_USE_EXPERIMENTAL_VIEWS "use-experimental-views"
-
 /* Which text attributes appear beneath icon names */
 #define NAUTILUS_PREFERENCES_ICON_VIEW_CAPTIONS				"captions"
-
-/* ellipsization preferences */
-#define NAUTILUS_PREFERENCES_ICON_VIEW_TEXT_ELLIPSIS_LIMIT		"text-ellipsis-limit"
 
 /* List View */
 #define NAUTILUS_PREFERENCES_LIST_VIEW_DEFAULT_ZOOM_LEVEL		"default-zoom-level"
@@ -128,9 +116,6 @@ typedef enum
 /* Recent files */
 #define NAUTILUS_PREFERENCES_RECENT_FILES_ENABLED          "remember-recent-files"
 
-/* Default view when searching */
-#define NAUTILUS_PREFERENCES_SEARCH_VIEW "search-view"
-
 /* Search behaviour */
 #define NAUTILUS_PREFERENCES_RECURSIVE_SEARCH "recursive-search"
 
@@ -141,7 +126,22 @@ typedef enum
 /* Full Text Search enabled */
 #define NAUTILUS_PREFERENCES_FTS_ENABLED "fts-enabled"
 
+/* Gtk settings migration happened */
+#define NAUTILUS_PREFERENCES_MIGRATED_GTK_SETTINGS "migrated-gtk-settings"
+
+/* Date and time format in the view */
+#define NAUTILUS_PREFERENCES_DATE_TIME_FORMAT "date-time-format"
+
+typedef enum
+{
+        NAUTILUS_DATE_TIME_FORMAT_SIMPLE = 0,
+        NAUTILUS_DATE_TIME_FORMAT_DETAILED,
+} NautilusDateTimeFormat;
+
 void nautilus_global_preferences_init                      (void);
+guint nautilus_global_preferences_get_back_button (void);
+guint nautilus_global_preferences_get_forward_button (void);
+gboolean nautilus_global_preferences_get_use_extra_buttons (void);
 
 extern GSettings *nautilus_preferences;
 extern GSettings *nautilus_compression_preferences;
@@ -150,8 +150,8 @@ extern GSettings *nautilus_list_view_preferences;
 extern GSettings *nautilus_window_state;
 extern GSettings *gtk_filechooser_preferences;
 extern GSettings *gnome_lockdown_preferences;
-extern GSettings *gnome_background_preferences;
 extern GSettings *gnome_interface_preferences;
 extern GSettings *gnome_privacy_preferences;
+extern GSettings *localsearch_preferences;
 
 G_END_DECLS

@@ -34,8 +34,6 @@
 
 #include <glib-object.h>
 #include "nautilus-file-info.h"
-/* This should be removed at some point. */
-#include "nautilus-extension-types.h"
 
 G_BEGIN_DECLS
 
@@ -44,9 +42,6 @@ G_BEGIN_DECLS
 G_DECLARE_INTERFACE (NautilusInfoProvider, nautilus_info_provider,
                      NAUTILUS, INFO_PROVIDER,
                      GObject)
-
-/* For compatibility reasons, remove this once you start introducing breaking changes. */
-typedef NautilusInfoProviderInterface NautilusInfoProviderIface;
 
 /**
  * SECTION:nautilus-info-provider
@@ -119,16 +114,40 @@ struct _NautilusInfoProviderInterface
 };
 
 /* Interface Functions */
+/**
+ * nautilus_info_provider_update_file_info:
+ * @provider: a #NautilusInfoProvider
+ * @file: a #NautilusFileInfo
+ * @update_complete: the closure to invoke at some later time when returning
+ *                   @NAUTILUS_OPERATION_IN_PROGRESS.
+ * @handle: (transfer none) (nullable) (out): an opaque #NautilusOperationHandle
+ *           that must be set when returning @NAUTILUS_OPERATION_IN_PROGRESS.
+ *
+ * Returns: A #NautilusOperationResult.
+ */
 NautilusOperationResult nautilus_info_provider_update_file_info       (NautilusInfoProvider     *provider,
                                                                        NautilusFileInfo         *file,
                                                                        GClosure                 *update_complete,
                                                                        NautilusOperationHandle **handle);
+/**
+ * nautilus_info_provider_cancel_update:
+ * @provider: a #NautilusInfoProvider
+ * @handle: the opaque #NautilusOperationHandle returned from a previous call to
+ *          nautilus_info_provider_update_file_info().
+ */
 void                    nautilus_info_provider_cancel_update          (NautilusInfoProvider     *provider,
                                                                        NautilusOperationHandle  *handle);
 
 
 
 /* Helper functions for implementations */
+/**
+ * nautilus_info_provider_update_complete_invoke:
+ * @update_complete: a #GClosure
+ * @provider: a #NautilusInfoProvider
+ * @handle: an opaque #NautilusOperationHandle
+ * @result: a #NautilusOperationResult
+ */
 void                    nautilus_info_provider_update_complete_invoke (GClosure                 *update_complete,
                                                                        NautilusInfoProvider     *provider,
                                                                        NautilusOperationHandle  *handle,

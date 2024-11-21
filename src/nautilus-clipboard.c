@@ -33,297 +33,313 @@
 #include <gtk/gtk.h>
 #include <string.h>
 
-static GdkAtom copied_files_atom;
-
-typedef struct
+/* The .files member contains elements of type NautilusFile. */
+struct _NautilusClipboard
 {
     gboolean cut;
     GList *files;
-} ClipboardInfo;
+};
 
-static GList *
-convert_lines_to_str_list (char **lines)
-{
-    int i;
-    GList *result;
-
-    if (lines[0] == NULL)
-    {
-        return NULL;
-    }
-
-    result = NULL;
-    for (i = 0; lines[i] != NULL; i++)
-    {
-        result = g_list_prepend (result, g_strdup (lines[i]));
-    }
-    return g_list_reverse (result);
-}
+/* Boxed type used to wrap this struct in a clipboard GValue. */
+G_DEFINE_BOXED_TYPE (NautilusClipboard, nautilus_clipboard,
+                     nautilus_clipboard_copy, nautilus_clipboard_free)
 
 static char *
-convert_file_list_to_string (ClipboardInfo *info,
-                             gboolean       format_for_text,
-                             gsize         *len)
+nautilus_clipboard_to_string (NautilusClipboard *clip)
 {
     GString *uris;
-    char *uri, *tmp;
-    GFile *f;
+    char *uri;
     guint i;
     GList *l;
 
-    if (format_for_text)
-    {
-        uris = g_string_new (NULL);
-    }
-    else
-    {
-        uris = g_string_new (info->cut ? "cut" : "copy");
-    }
+    uris = g_string_new (clip->cut ? "cut" : "copy");
 
-    for (i = 0, l = info->files; l != NULL; l = l->next, i++)
+    for (i = 0, l = clip->files; l != NULL; l = l->next, i++)
     {
         uri = nautilus_file_get_uri (l->data);
 
-        if (format_for_text)
-        {
-            f = g_file_new_for_uri (uri);
-            tmp = g_file_get_parse_name (f);
-            g_object_unref (f);
-
-            if (tmp != NULL)
-            {
-                g_string_append (uris, tmp);
-                g_free (tmp);
-            }
-            else
-            {
-                g_string_append (uris, uri);
-            }
-
-            /* skip newline for last element */
-            if (i + 1 < g_list_length (info->files))
-            {
-                g_string_append_c (uris, '\n');
-            }
-        }
-        else
-        {
-            g_string_append_c (uris, '\n');
-            g_string_append (uris, uri);
-        }
+        g_string_append_c (uris, '\n');
+        g_string_append (uris, uri);
 
         g_free (uri);
     }
 
-    *len = uris->len;
     return g_string_free (uris, FALSE);
 }
 
-static GList *
-get_item_list_from_selection_data (GtkSelectionData *selection_data)
+static NautilusClipboard *
+nautilus_clipboard_from_string (char    *string,
+                                GError **error)
 {
-    GList *items;
-    char **lines;
+    NautilusClipboard *clip;
+    g_auto (GStrv) lines = NULL;
+    g_autolist (NautilusFile) files = NULL;
 
-    if (gtk_selection_data_get_data_type (selection_data) != copied_files_atom
-        || gtk_selection_data_get_length (selection_data) <= 0)
+    if (string == NULL)
     {
-        items = NULL;
-    }
-    else
-    {
-        gchar *data;
-        /* Not sure why it's legal to assume there's an extra byte
-         * past the end of the selection data that it's safe to write
-         * to. But gtk_editable_selection_received does this, so I
-         * think it is OK.
-         */
-        data = (gchar *) gtk_selection_data_get_data (selection_data);
-        data[gtk_selection_data_get_length (selection_data)] = '\0';
-        lines = g_strsplit (data, "\n", 0);
-        items = convert_lines_to_str_list (lines);
-        g_strfreev (lines);
+        *error = g_error_new (G_IO_ERROR, G_IO_ERROR_INVALID_DATA, _("Clipboard string cannot be NULL."));
+        return NULL;
     }
 
-    return items;
-}
+    lines = g_strsplit (string, "\n", 0);
 
-GList *
-nautilus_clipboard_get_uri_list_from_selection_data (GtkSelectionData *selection_data)
-{
-    GList *items;
-
-    items = get_item_list_from_selection_data (selection_data);
-    if (items)
+    if (g_strcmp0 (lines[0], "cut") != 0 && g_strcmp0 (lines[0], "copy") != 0)
     {
-        /* Line 0 is "cut" or "copy", so uris start at line 1. */
-        items = g_list_remove (items, items->data);
+        /* Translators: Do not translate 'cut' and 'copy'. These are literal keywords. */
+        *error = g_error_new (G_IO_ERROR, G_IO_ERROR_INVALID_DATA, _("Nautilus Clipboard must begin with “cut” or “copy”."));
+        return NULL;
     }
 
-    return items;
-}
+    /* Line 0 is "cut" or "copy", so uris start at line 1. */
+    for (int i = 1; lines[i] != NULL; i++)
+    {
+        if (g_strcmp0 (lines[i], "") == 0)
+        {
+            *error = g_error_new (G_IO_ERROR, G_IO_ERROR_INVALID_DATA, _("Nautilus Clipboard must not have empty lines."));
+            return NULL;
+        }
+        else if (!g_uri_is_valid (lines[i], G_URI_FLAGS_NONE, error))
+        {
+            return NULL;
+        }
+        files = g_list_prepend (files, nautilus_file_get_by_uri (lines[i]));
+    }
 
-GtkClipboard *
-nautilus_clipboard_get (GtkWidget *widget)
-{
-    return gtk_clipboard_get_for_display (gtk_widget_get_display (GTK_WIDGET (widget)),
-                                          GDK_SELECTION_CLIPBOARD);
+    clip = g_new0 (NautilusClipboard, 1);
+    files = g_list_reverse (files);
+    clip->files = g_steal_pointer (&files);
+    clip->cut = g_str_equal (lines[0], "cut");
+
+    return clip;
 }
 
 void
 nautilus_clipboard_clear_if_colliding_uris (GtkWidget   *widget,
                                             const GList *item_uris)
 {
-    GtkSelectionData *data;
-    GList *clipboard_item_uris, *l;
-    gboolean collision;
+    GdkClipboard *clipboard = gtk_widget_get_clipboard (widget);
+    GdkContentFormats *formats = gdk_clipboard_get_formats (clipboard);
+    g_auto (GValue) value = G_VALUE_INIT;
+    NautilusClipboard *nautilus_clipboard;
+    GList *clipboard_item_uris;
 
-    collision = FALSE;
-    data = gtk_clipboard_wait_for_contents (nautilus_clipboard_get (widget),
-                                            copied_files_atom);
-    if (data == NULL)
+    if (!gdk_clipboard_is_local (clipboard) ||
+        !gdk_content_formats_contain_gtype (formats, NAUTILUS_TYPE_CLIPBOARD))
     {
         return;
     }
 
-    clipboard_item_uris = nautilus_clipboard_get_uri_list_from_selection_data (data);
+    g_value_init (&value, NAUTILUS_TYPE_CLIPBOARD);
+    if (!gdk_content_provider_get_value (gdk_clipboard_get_content (clipboard), &value, NULL))
+    {
+        return;
+    }
+    nautilus_clipboard = g_value_get_boxed (&value);
+    clipboard_item_uris = nautilus_clipboard_get_uri_list (nautilus_clipboard);
 
-    for (l = (GList *) item_uris; l; l = l->next)
+    for (GList *l = (GList *) item_uris; l != NULL; l = l->next)
     {
         if (g_list_find_custom ((GList *) clipboard_item_uris, l->data,
                                 (GCompareFunc) g_strcmp0))
         {
-            collision = TRUE;
+            gdk_clipboard_set_content (clipboard, NULL);
             break;
         }
     }
 
-    if (collision)
+    g_list_free_full (clipboard_item_uris, g_free);
+}
+
+/*
+ * This asumes the implementation of GTK_TYPE_FILE_LIST is a GSList<GFile>.
+ * As of writing this, the API docs don't provide for this assumption.
+ */
+static GSList *
+convert_file_list_to_gdk_file_list (NautilusClipboard *clip)
+{
+    GSList *file_list = NULL;
+    for (GList *l = clip->files; l != NULL; l = l->next)
     {
-        gtk_clipboard_clear (nautilus_clipboard_get (widget));
+        file_list = g_slist_prepend (file_list,
+                                     nautilus_file_get_location (l->data));
+    }
+    return g_slist_reverse (file_list);
+}
+
+static void
+nautilus_clipboard_serialize (GdkContentSerializer *serializer)
+{
+    NautilusClipboard *clip;
+    g_autofree gchar *str = NULL;
+    g_autoptr (GError) error = NULL;
+
+    clip = g_value_get_boxed (gdk_content_serializer_get_value (serializer));
+
+    str = nautilus_clipboard_to_string (clip);
+
+    if (g_output_stream_printf (gdk_content_serializer_get_output_stream (serializer),
+                                NULL,
+                                gdk_content_serializer_get_cancellable (serializer),
+                                &error,
+                                "%s", str))
+    {
+        gdk_content_serializer_return_success (serializer);
+    }
+    else
+    {
+        gdk_content_serializer_return_error (serializer, error);
+    }
+}
+
+static void
+nautilus_clipboard_deserialize_finish (GObject      *source,
+                                       GAsyncResult *result,
+                                       gpointer      user_data)
+{
+    GdkContentDeserializer *deserializer = user_data;
+    GOutputStream *output = G_OUTPUT_STREAM (source);
+    GError *error = NULL;
+    g_autofree gchar *string = NULL;
+    g_autoptr (NautilusClipboard) clip = NULL;
+
+    if (g_output_stream_splice_finish (output, result, &error) < 0)
+    {
+        gdk_content_deserializer_return_error (deserializer, error);
+        return;
     }
 
-    if (clipboard_item_uris)
+    /* write terminating NULL */
+    if (g_output_stream_write (output, "", 1, NULL, &error) < 0 ||
+        !g_output_stream_close (output, NULL, &error))
     {
-        g_list_free_full (clipboard_item_uris, g_free);
+        gdk_content_deserializer_return_error (deserializer, error);
+        return;
     }
+
+    string = g_memory_output_stream_steal_data (G_MEMORY_OUTPUT_STREAM (output));
+
+    clip = nautilus_clipboard_from_string (string, &error);
+
+    if (clip == NULL)
+    {
+        gdk_content_deserializer_return_error (deserializer, error);
+        return;
+    }
+
+    g_value_set_boxed (gdk_content_deserializer_get_value (deserializer), clip);
+    gdk_content_deserializer_return_success (deserializer);
+}
+
+static void
+nautilus_clipboard_deserialize (GdkContentDeserializer *deserializer)
+{
+    g_autoptr (GOutputStream) output = NULL;
+
+    output = g_memory_output_stream_new_resizable ();
+    g_output_stream_splice_async (output,
+                                  gdk_content_deserializer_get_input_stream (deserializer),
+                                  G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE,
+                                  gdk_content_deserializer_get_priority (deserializer),
+                                  gdk_content_deserializer_get_cancellable (deserializer),
+                                  nautilus_clipboard_deserialize_finish,
+                                  deserializer);
+}
+
+/**
+ * nautilus_clipboard_peek_files:
+ * @clip: The current local clipboard value.
+ *
+ * Returns: (transfer none): The internal GList of GFile objects.
+ */
+GList *
+nautilus_clipboard_peek_files (NautilusClipboard *clip)
+{
+    return clip->files;
+}
+
+/**
+ * nautilus_clipboard_get_uri_list:
+ * @clip: The current local clipboard value.
+ *
+ * Returns: (transfer full): A GList of URI strings.
+ */
+GList *
+nautilus_clipboard_get_uri_list (NautilusClipboard *clip)
+{
+    GList *uris = NULL;
+
+    for (GList *l = clip->files; l != NULL; l = l->next)
+    {
+        uris = g_list_prepend (uris, nautilus_file_get_uri (l->data));
+    }
+
+    return g_list_reverse (uris);
 }
 
 gboolean
-nautilus_clipboard_is_cut_from_selection_data (GtkSelectionData *selection_data)
+nautilus_clipboard_is_cut (NautilusClipboard *clip)
 {
-    GList *items;
-    gboolean is_cut_from_selection_data;
-
-    items = get_item_list_from_selection_data (selection_data);
-    is_cut_from_selection_data = items != NULL &&
-                                 g_strcmp0 ((gchar *) items->data, "cut") == 0;
-
-    g_list_free_full (items, g_free);
-
-    return is_cut_from_selection_data;
+    return clip->cut;
 }
 
-static void
-on_get_clipboard (GtkClipboard     *clipboard,
-                  GtkSelectionData *selection_data,
-                  guint             info,
-                  gpointer          user_data)
+NautilusClipboard *
+nautilus_clipboard_copy (NautilusClipboard *clip)
 {
-    char **uris;
-    GList *l;
-    int i;
-    ClipboardInfo *clipboard_info;
-    GdkAtom target;
+    NautilusClipboard *new_clip = g_new0 (NautilusClipboard, 1);
 
-    clipboard_info = (ClipboardInfo *) user_data;
+    new_clip->cut = clip->cut;
+    new_clip->files = nautilus_file_list_copy (clip->files);
 
-    target = gtk_selection_data_get_target (selection_data);
-
-    if (gtk_targets_include_uri (&target, 1))
-    {
-        uris = g_malloc ((g_list_length (clipboard_info->files) + 1) * sizeof (char *));
-        i = 0;
-
-        for (l = clipboard_info->files; l != NULL; l = l->next)
-        {
-            uris[i] = nautilus_file_get_uri (l->data);
-            i++;
-        }
-
-        uris[i] = NULL;
-
-        gtk_selection_data_set_uris (selection_data, uris);
-
-        g_strfreev (uris);
-    }
-    else if (gtk_targets_include_text (&target, 1))
-    {
-        char *str;
-        gsize len;
-
-        str = convert_file_list_to_string (clipboard_info, TRUE, &len);
-        gtk_selection_data_set_text (selection_data, str, len);
-        g_free (str);
-    }
-    else if (target == copied_files_atom)
-    {
-        char *str;
-        gsize len;
-
-        str = convert_file_list_to_string (clipboard_info, FALSE, &len);
-        gtk_selection_data_set (selection_data, copied_files_atom, 8, (guchar *) str, len);
-        g_free (str);
-    }
-}
-
-static void
-on_clear_clipboard (GtkClipboard *clipboard,
-                    gpointer      user_data)
-{
-    ClipboardInfo *clipboard_info = (ClipboardInfo *) user_data;
-
-    nautilus_file_list_free (clipboard_info->files);
-
-    g_free (clipboard_info);
+    return new_clip;
 }
 
 void
-nautilus_clipboard_prepare_for_files (GtkClipboard *clipboard,
+nautilus_clipboard_free (NautilusClipboard *clip)
+{
+    nautilus_file_list_free (clip->files);
+    g_free (clip);
+}
+
+void
+nautilus_clipboard_prepare_for_files (GdkClipboard *clipboard,
                                       GList        *files,
                                       gboolean      cut)
 {
-    GtkTargetList *target_list;
-    GtkTargetEntry *targets;
-    int n_targets;
-    ClipboardInfo *clipboard_info;
+    g_autoptr (NautilusClipboard) clip = NULL;
+    g_autoslist (GFile) file_list = NULL;
+    GdkContentProvider *providers[2];
+    g_autoptr (GdkContentProvider) provider = NULL;
 
-    clipboard_info = g_new (ClipboardInfo, 1);
-    clipboard_info->cut = cut;
-    clipboard_info->files = nautilus_file_list_copy (files);
+    clip = g_new (NautilusClipboard, 1);
+    clip->cut = cut;
+    clip->files = nautilus_file_list_copy (files);
 
-    target_list = gtk_target_list_new (NULL, 0);
-    gtk_target_list_add (target_list, copied_files_atom, 0, 0);
-    gtk_target_list_add_uri_targets (target_list, 0);
-    gtk_target_list_add_text_targets (target_list, 0);
+    file_list = convert_file_list_to_gdk_file_list (clip);
 
-    targets = gtk_target_table_new_from_list (target_list, &n_targets);
-    gtk_target_list_unref (target_list);
+    providers[0] = gdk_content_provider_new_typed (NAUTILUS_TYPE_CLIPBOARD, clip);
+    providers[1] = gdk_content_provider_new_typed (GDK_TYPE_FILE_LIST, file_list);
 
-    gtk_clipboard_set_with_data (clipboard,
-                                 targets, n_targets,
-                                 on_get_clipboard, on_clear_clipboard,
-                                 clipboard_info);
-    gtk_target_table_free (targets, n_targets);
+    provider = gdk_content_provider_new_union (providers, 2);
+    gdk_clipboard_set_content (clipboard, provider);
 }
 
-GdkAtom
-nautilus_clipboard_get_atom (void)
+void
+nautilus_clipboard_register (void)
 {
-    if (!copied_files_atom)
-    {
-        copied_files_atom = gdk_atom_intern_static_string ("x-special/gnome-copied-files");
-    }
+    /*
+     * While it'is not a public API and the format is not documented, some apps
+     * have come to use this atom/mime type to integrate with our clipboard.
+     */
+    const gchar *nautilus_clipboard_mime_type = "x-special/gnome-copied-files";
 
-    return copied_files_atom;
+    gdk_content_register_serializer (NAUTILUS_TYPE_CLIPBOARD,
+                                     nautilus_clipboard_mime_type,
+                                     nautilus_clipboard_serialize,
+                                     NULL,
+                                     NULL);
+    gdk_content_register_deserializer (nautilus_clipboard_mime_type,
+                                       NAUTILUS_TYPE_CLIPBOARD,
+                                       nautilus_clipboard_deserialize,
+                                       NULL,
+                                       NULL);
 }

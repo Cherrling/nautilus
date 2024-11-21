@@ -32,6 +32,7 @@
 #include "nautilus-file-undo-manager.h"
 #include "nautilus-batch-rename-dialog.h"
 #include "nautilus-batch-rename-utilities.h"
+#include "nautilus-scheme.h"
 #include "nautilus-tag-manager.h"
 
 
@@ -474,8 +475,8 @@ ext_strings_func (NautilusFileUndoInfo  *info,
     }
     else if (op_type == NAUTILUS_FILE_UNDO_OP_RESTORE_FROM_TRASH)
     {
-        *undo_label = g_strdup (_("_Undo Restore from Trash"));
-        *redo_label = g_strdup (_("_Redo Restore from Trash"));
+        *undo_label = g_strdup (_("_Undo Restore From Trash"));
+        *redo_label = g_strdup (_("_Redo Restore From Trash"));
 
         if (count > 1)
         {
@@ -804,9 +805,13 @@ struct _NautilusFileUndoInfoCreate
 {
     NautilusFileUndoInfo parent_instance;
 
-    char *template;
+    union
+    {
+        char *template;
+        void *buffer;
+    };
     GFile *target_file;
-    gint length;
+    gsize length;
 };
 
 G_DEFINE_TYPE (NautilusFileUndoInfoCreate, nautilus_file_undo_info_create, NAUTILUS_TYPE_FILE_UNDO_INFO)
@@ -843,8 +848,8 @@ create_strings_func (NautilusFileUndoInfo  *info,
     {
         *redo_description = g_strdup_printf (_("Create new file “%s” from template "), name);
 
-        *undo_label = g_strdup (_("_Undo Create from Template"));
-        *redo_label = g_strdup (_("_Redo Create from Template"));
+        *undo_label = g_strdup (_("_Undo Create From Template"));
+        *redo_label = g_strdup (_("_Redo Create From Template"));
     }
     else
     {
@@ -872,7 +877,7 @@ create_from_template_redo_func (NautilusFileUndoInfoCreate     *self,
 
     parent = g_file_get_parent (self->target_file);
     parent_uri = g_file_get_uri (parent);
-    new_name = g_file_get_parse_name (self->target_file);
+    new_name = g_file_get_basename (self->target_file);
     nautilus_file_operations_new_file_from_template (NULL,
                                                      parent_uri, new_name,
                                                      self->template,
@@ -1010,12 +1015,23 @@ nautilus_file_undo_info_create_new (NautilusFileUndoOp op_type)
 void
 nautilus_file_undo_info_create_set_data (NautilusFileUndoInfoCreate *self,
                                          GFile                      *file,
-                                         const char                 *template,
-                                         gint                        length)
+                                         const void                 *template,
+                                         gsize                       length)
 {
+    NautilusFileUndoOp op_type = nautilus_file_undo_info_get_op_type (NAUTILUS_FILE_UNDO_INFO (self));
+
     self->target_file = g_object_ref (file);
-    self->template = g_strdup (template);
-    self->length = length;
+    if (op_type == NAUTILUS_FILE_UNDO_OP_CREATE_EMPTY_FILE)
+    {
+        /* Operation name is a misnomer, it still can hold data to write to
+         * the newly created file. */
+        self->buffer = g_memdup2 (template, length);
+        self->length = length;
+    }
+    else if (op_type == NAUTILUS_FILE_UNDO_OP_CREATE_FILE_FROM_TEMPLATE)
+    {
+        self->template = g_strdup (template);
+    }
 }
 
 /* rename */
@@ -1126,8 +1142,8 @@ nautilus_file_undo_info_rename_new (void)
 void
 nautilus_file_undo_info_rename_set_data_pre (NautilusFileUndoInfoRename *self,
                                              GFile                      *old_file,
-                                             gchar                      *old_display_name,
-                                             gchar                      *new_display_name)
+                                             const char                 *old_display_name,
+                                             const char                 *new_display_name)
 {
     self->old_file = g_object_ref (old_file);
     self->old_display_name = g_strdup (old_display_name);
@@ -1328,7 +1344,7 @@ nautilus_file_undo_info_batch_rename_set_data_pre (NautilusFileUndoInfoBatchRena
     {
         file = l->data;
 
-        old_name = g_string_new (g_file_get_basename (file));
+        old_name = g_string_new_take (g_file_get_basename (file));
 
         self->old_display_names = g_list_prepend (self->old_display_names, old_name);
     }
@@ -1351,7 +1367,7 @@ nautilus_file_undo_info_batch_rename_set_data_post (NautilusFileUndoInfoBatchRen
     {
         file = l->data;
 
-        new_name = g_string_new (g_file_get_basename (file));
+        new_name = g_string_new_take (g_file_get_basename (file));
 
         self->new_display_names = g_list_prepend (self->new_display_names, new_name);
     }
@@ -1437,11 +1453,10 @@ starred_redo_func (NautilusFileUndoInfo           *info,
                    NautilusFileOperationsDBusData *dbus_data)
 {
     NautilusFileUndoInfoStarred *self = NAUTILUS_FILE_UNDO_INFO_STARRED (info);
-    g_autoptr (NautilusTagManager) tag_manager = nautilus_tag_manager_get ();
 
     if (self->starred)
     {
-        nautilus_tag_manager_star_files (tag_manager,
+        nautilus_tag_manager_star_files (nautilus_tag_manager_get (),
                                          G_OBJECT (info),
                                          self->files,
                                          on_undo_starred_tags_updated,
@@ -1449,7 +1464,7 @@ starred_redo_func (NautilusFileUndoInfo           *info,
     }
     else
     {
-        nautilus_tag_manager_unstar_files (tag_manager,
+        nautilus_tag_manager_unstar_files (nautilus_tag_manager_get (),
                                            G_OBJECT (info),
                                            self->files,
                                            on_undo_starred_tags_updated,
@@ -1463,11 +1478,10 @@ starred_undo_func (NautilusFileUndoInfo           *info,
                    NautilusFileOperationsDBusData *dbus_data)
 {
     NautilusFileUndoInfoStarred *self = NAUTILUS_FILE_UNDO_INFO_STARRED (info);
-    g_autoptr (NautilusTagManager) tag_manager = nautilus_tag_manager_get ();
 
     if (self->starred)
     {
-        nautilus_tag_manager_unstar_files (tag_manager,
+        nautilus_tag_manager_unstar_files (nautilus_tag_manager_get (),
                                            G_OBJECT (info),
                                            self->files,
                                            on_undo_starred_tags_updated,
@@ -1475,7 +1489,7 @@ starred_undo_func (NautilusFileUndoInfo           *info,
     }
     else
     {
-        nautilus_tag_manager_star_files (tag_manager,
+        nautilus_tag_manager_star_files (nautilus_tag_manager_get (),
                                          G_OBJECT (info),
                                          self->files,
                                          on_undo_starred_tags_updated,
@@ -1647,8 +1661,7 @@ trash_redo_func_callback (GHashTable *debuting_uris,
 {
     NautilusFileUndoInfoTrash *self = user_data;
     GHashTable *new_trashed_files;
-    GTimeVal current_time;
-    gsize updated_trash_time;
+    gint64 updated_trash_time;
     GFile *file;
     GList *keys, *l;
 
@@ -1656,18 +1669,19 @@ trash_redo_func_callback (GHashTable *debuting_uris,
     {
         new_trashed_files =
             g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
-                                   g_object_unref, NULL);
+                                   g_object_unref, g_free);
 
         keys = g_hash_table_get_keys (self->trashed);
 
-        g_get_current_time (&current_time);
-        updated_trash_time = current_time.tv_sec;
+        /* Convert from microseconds to seconds */
+        updated_trash_time = g_get_real_time () / 1000000;
 
         for (l = keys; l != NULL; l = l->next)
         {
             file = l->data;
             g_hash_table_insert (new_trashed_files,
-                                 g_object_ref (file), GSIZE_TO_POINTER (updated_trash_time));
+                                 g_object_ref (file),
+                                 g_memdup2 (&updated_trash_time, sizeof (updated_trash_time)));
         }
 
         g_list_free (keys);
@@ -1714,7 +1728,7 @@ trash_retrieve_files_to_restore_thread (GTask        *task,
     to_restore = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
                                         g_object_unref, g_object_unref);
 
-    trash = g_file_new_for_uri ("trash:///");
+    trash = g_file_new_for_uri (SCHEME_TRASH ":///");
 
     enumerator = g_file_enumerate_children (trash,
                                             G_FILE_ATTRIBUTE_STANDARD_NAME ","
@@ -1728,7 +1742,8 @@ trash_retrieve_files_to_restore_thread (GTask        *task,
         GFileInfo *info;
         gpointer lookupvalue;
         GFile *item;
-        glong trash_time, orig_trash_time;
+        gint64 orig_trash_time;
+        gint64 trash_time;
         const char *origpath;
         GFile *origfile;
 
@@ -1744,7 +1759,7 @@ trash_retrieve_files_to_restore_thread (GTask        *task,
             {
                 GDateTime *date;
 
-                orig_trash_time = GPOINTER_TO_SIZE (lookupvalue);
+                orig_trash_time = *((guint64 *) lookupvalue);
                 trash_time = 0;
                 date = g_file_info_get_deletion_date (info);
                 if (date)
@@ -1852,7 +1867,7 @@ static void
 nautilus_file_undo_info_trash_init (NautilusFileUndoInfoTrash *self)
 {
     self->trashed = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
-                                           g_object_unref, NULL);
+                                           g_object_unref, g_free);
 }
 
 static void
@@ -1890,13 +1905,11 @@ void
 nautilus_file_undo_info_trash_add_file (NautilusFileUndoInfoTrash *self,
                                         GFile                     *file)
 {
-    GTimeVal current_time;
-    gsize orig_trash_time;
-
-    g_get_current_time (&current_time);
-    orig_trash_time = current_time.tv_sec;
-
-    g_hash_table_insert (self->trashed, g_object_ref (file), GSIZE_TO_POINTER (orig_trash_time));
+    /* Convert from microseconds to seconds */
+    gint64 orig_trash_time = g_get_real_time () / 1000000;
+    g_hash_table_insert (self->trashed,
+                         g_object_ref (file),
+                         g_memdup2 (&orig_trash_time, sizeof (orig_trash_time)));
 }
 
 GList *

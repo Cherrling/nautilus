@@ -17,23 +17,24 @@
  *
  * Author: Marco Trevisan <marco.trevisan@canonical.com>
  */
+#define G_LOG_DOMAIN "nautilus-search"
 
 #include <config.h>
 #include "nautilus-search-hit.h"
 #include "nautilus-search-provider.h"
 #include "nautilus-search-engine-recent.h"
-#include "nautilus-search-engine-private.h"
 #include "nautilus-ui-utilities.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH
-#include "nautilus-debug.h"
 
 #include <string.h>
 #include <glib.h>
 #include <gio/gio.h>
 
 #define FILE_ATTRIBS G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN "," \
-    G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP "," \
-    G_FILE_ATTRIBUTE_ACCESS_CAN_READ ","
+        G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP "," \
+        G_FILE_ATTRIBUTE_ACCESS_CAN_READ "," \
+        G_FILE_ATTRIBUTE_TIME_MODIFIED "," \
+        G_FILE_ATTRIBUTE_TIME_ACCESS "," \
+        G_FILE_ATTRIBUTE_TIME_CREATED
 
 struct _NautilusSearchEngineRecent
 {
@@ -101,7 +102,7 @@ search_thread_add_hits_idle (gpointer user_data)
     if (!g_cancellable_is_cancelled (self->cancellable))
     {
         nautilus_search_provider_hits_added (provider, search_hits->hits);
-        DEBUG ("Recent engine add hits");
+        g_debug ("Recent engine add hits");
     }
 
     self->running = FALSE;
@@ -109,6 +110,7 @@ search_thread_add_hits_idle (gpointer user_data)
     g_clear_object (&self->cancellable);
     g_free (search_hits);
 
+    g_debug ("Recent engine finished");
     nautilus_search_provider_finished (provider,
                                        NAUTILUS_SEARCH_PROVIDER_STATUS_NORMAL);
     g_object_notify (G_OBJECT (provider), "running");
@@ -138,9 +140,11 @@ search_add_hits_idle (NautilusSearchEngineRecent *self,
 static gboolean
 is_file_valid_recursive (NautilusSearchEngineRecent  *self,
                          GFile                       *file,
+                         GDateTime                  **mtime,
+                         GDateTime                  **atime,
+                         GDateTime                  **ctime,
                          GError                     **error)
 {
-    g_autofree gchar *path = NULL;
     g_autoptr (GFileInfo) file_info = NULL;
 
     file_info = g_file_query_info (file, FILE_ATTRIBS,
@@ -157,18 +161,30 @@ is_file_valid_recursive (NautilusSearchEngineRecent  *self,
         return FALSE;
     }
 
-    path = g_file_get_path (file);
+    if (mtime && atime && ctime)
+    {
+        *mtime = g_file_info_get_modification_date_time (file_info);
+        *atime = g_file_info_get_access_date_time (file_info);
+        *ctime = g_file_info_get_creation_date_time (file_info);
+    }
 
     if (!nautilus_query_get_show_hidden_files (self->query))
     {
-        if (!g_file_info_get_is_hidden (file_info) &&
-            !g_file_info_get_is_backup (file_info))
+        gboolean is_hidden;
+
+        is_hidden = g_file_info_get_attribute_boolean (file_info,
+                                                       G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN) ||
+                    g_file_info_get_attribute_boolean (file_info,
+                                                       G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP);
+        if (!is_hidden)
         {
             g_autoptr (GFile) parent = g_file_get_parent (file);
 
             if (parent)
             {
-                return is_file_valid_recursive (self, parent, error);
+                return is_file_valid_recursive (self, parent,
+                                                NULL, NULL, NULL,
+                                                error);
             }
         }
         else
@@ -210,7 +226,7 @@ recent_thread_func (gpointer user_data)
         uri = gtk_recent_info_get_uri (info);
         file = g_file_new_for_uri (uri);
 
-        if (!g_file_has_prefix (file, query_location))
+        if (query_location != NULL && !g_file_has_prefix (file, query_location))
         {
             continue;
         }
@@ -232,30 +248,31 @@ recent_thread_func (gpointer user_data)
         if (rank > 0)
         {
             NautilusSearchHit *hit;
-            time_t modified, visited;
-            g_autoptr (GDateTime) gmodified = NULL;
-            g_autoptr (GDateTime) gvisited = NULL;
+            g_autoptr (GDateTime) mtime = NULL;
+            g_autoptr (GDateTime) atime = NULL;
+            g_autoptr (GDateTime) ctime = NULL;
+            g_autoptr (GError) error = NULL;
 
-            if (gtk_recent_info_is_local (info))
+            if (!gtk_recent_info_is_local (info))
             {
-                g_autoptr (GError) error = NULL;
+                continue;
+            }
 
-                if (!is_file_valid_recursive (self, file, &error))
+            if (!is_file_valid_recursive (self, file, &mtime, &atime, &ctime, &error))
+            {
+                if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
                 {
-                    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-                    {
-                        break;
-                    }
-
-                    if (error != NULL &&
-                        !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-                    {
-                        g_debug ("Impossible to read recent file info: %s",
-                                 error->message);
-                    }
-
-                    continue;
+                    break;
                 }
+
+                if (error != NULL &&
+                    !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+                {
+                    g_debug ("Impossible to read recent file info: %s",
+                             error->message);
+                }
+
+                continue;
             }
 
             if (mime_types->len > 0)
@@ -263,7 +280,7 @@ recent_thread_func (gpointer user_data)
                 const gchar *mime_type = gtk_recent_info_get_mime_type (info);
                 gboolean found = FALSE;
 
-                for (gint i = 0; mime_type != NULL && i < mime_types->len; i++)
+                for (guint i = 0; mime_type != NULL && i < mime_types->len; i++)
                 {
                     if (g_content_type_is_a (mime_type, g_ptr_array_index (mime_types, i)))
                     {
@@ -278,27 +295,46 @@ recent_thread_func (gpointer user_data)
                 }
             }
 
-            modified = gtk_recent_info_get_modified (info);
-            visited = gtk_recent_info_get_visited (info);
-
-            gmodified = g_date_time_new_from_unix_local (modified);
-            gvisited = g_date_time_new_from_unix_local (visited);
-
             if (date_range != NULL)
             {
                 NautilusQuerySearchType type;
-                guint64 target_time;
+                GDateTime *target_date;
                 GDateTime *initial_date;
                 GDateTime *end_date;
 
                 initial_date = g_ptr_array_index (date_range, 0);
                 end_date = g_ptr_array_index (date_range, 1);
                 type = nautilus_query_get_search_type (self->query);
-                target_time = (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS) ?
-                              visited : modified;
 
-                if (!nautilus_file_date_in_between (target_time,
-                                                    initial_date, end_date))
+                switch (type)
+                {
+                    case NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS:
+                    {
+                        target_date = atime;
+                    }
+                    break;
+
+                    case NAUTILUS_QUERY_SEARCH_TYPE_LAST_MODIFIED:
+                    {
+                        target_date = mtime;
+                    }
+                    break;
+
+                    case NAUTILUS_QUERY_SEARCH_TYPE_CREATED:
+                    {
+                        target_date = ctime;
+                    }
+                    break;
+
+                    default:
+                    {
+                        target_date = NULL;
+                    }
+                }
+
+                if (!nautilus_date_time_is_between_dates (target_date,
+                                                          initial_date,
+                                                          end_date))
                 {
                     continue;
                 }
@@ -306,8 +342,9 @@ recent_thread_func (gpointer user_data)
 
             hit = nautilus_search_hit_new (uri);
             nautilus_search_hit_set_fts_rank (hit, rank);
-            nautilus_search_hit_set_modification_time (hit, gmodified);
-            nautilus_search_hit_set_access_time (hit, gvisited);
+            nautilus_search_hit_set_modification_time (hit, mtime);
+            nautilus_search_hit_set_access_time (hit, atime);
+            nautilus_search_hit_set_creation_time (hit, ctime);
 
             hits = g_list_prepend (hits, hit);
         }
@@ -324,21 +361,12 @@ static void
 nautilus_search_engine_recent_start (NautilusSearchProvider *provider)
 {
     NautilusSearchEngineRecent *self = NAUTILUS_SEARCH_ENGINE_RECENT (provider);
-    g_autoptr (GFile) location = NULL;
     g_autoptr (GThread) thread = NULL;
 
     g_return_if_fail (self->query);
     g_return_if_fail (self->cancellable == NULL);
 
-    location = nautilus_query_get_location (self->query);
-
-    if (!is_recursive_search (NAUTILUS_SEARCH_ENGINE_TYPE_INDEXED,
-                              nautilus_query_get_recursive (self->query),
-                              location))
-    {
-        search_add_hits_idle (self, NULL);
-        return;
-    }
+    g_debug ("Recent engine start");
 
     self->running = TRUE;
     self->cancellable = g_cancellable_new ();
@@ -355,7 +383,7 @@ nautilus_search_engine_recent_stop (NautilusSearchProvider *provider)
 
     if (self->cancellable != NULL)
     {
-        DEBUG ("Recent engine stop");
+        g_debug ("Recent engine stop");
         g_cancellable_cancel (self->cancellable);
     }
 

@@ -18,20 +18,32 @@
  * Author: Jamie McCracken <jamiemcc@gnome.org>
  *
  */
+#define G_LOG_DOMAIN "nautilus-search"
 
 #include <config.h>
 #include "nautilus-search-engine-tracker.h"
 
-#include "nautilus-search-engine-private.h"
+#include "nautilus-file.h"
 #include "nautilus-search-hit.h"
 #include "nautilus-search-provider.h"
 #include "nautilus-tracker-utilities.h"
-#define DEBUG_FLAG NAUTILUS_DEBUG_SEARCH
-#include "nautilus-debug.h"
 
 #include <string.h>
 #include <gio/gio.h>
 #include <libtracker-sparql/tracker-sparql.h>
+
+typedef enum
+{
+    SEARCH_FEATURE_NONE = 0,
+    SEARCH_FEATURE_TERMS = 1 << 0,
+    SEARCH_FEATURE_CONTENT = 1 << 1,
+    SEARCH_FEATURE_MIMETYPE = 1 << 2,
+    SEARCH_FEATURE_RECURSIVE = 1 << 3,
+    SEARCH_FEATURE_ATIME = 1 << 4,
+    SEARCH_FEATURE_MTIME = 1 << 5,
+    SEARCH_FEATURE_CTIME = 1 << 6,
+    SEARCH_FEATURE_LOCATION = 1 << 7,
+} SearchFeatures;
 
 struct _NautilusSearchEngineTracker
 {
@@ -39,6 +51,7 @@ struct _NautilusSearchEngineTracker
 
     TrackerSparqlConnection *connection;
     NautilusQuery *query;
+    GHashTable *statements;
 
     gboolean query_pending;
     GQueue *hits_pending;
@@ -79,6 +92,7 @@ finalize (GObject *object)
 
     g_clear_object (&tracker->query);
     g_queue_free_full (tracker->hits_pending, g_object_unref);
+    g_clear_pointer (&tracker->statements, g_hash_table_unref);
     /* This is a singleton, no need to unref. */
     tracker->connection = NULL;
 
@@ -94,7 +108,7 @@ check_pending_hits (NautilusSearchEngineTracker *tracker,
     GList *hits = NULL;
     NautilusSearchHit *hit;
 
-    DEBUG ("Tracker engine add hits");
+    g_debug ("Tracker engine add hits");
 
     if (!force_send &&
         g_queue_get_length (tracker->hits_pending) < BATCH_SIZE)
@@ -115,7 +129,7 @@ static void
 search_finished (NautilusSearchEngineTracker *tracker,
                  GError                      *error)
 {
-    DEBUG ("Tracker engine finished");
+    g_debug ("Tracker engine finished");
 
     if (error == NULL)
     {
@@ -133,7 +147,7 @@ search_finished (NautilusSearchEngineTracker *tracker,
 
     if (error && !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
     {
-        DEBUG ("Tracker engine error %s", error->message);
+        g_debug ("Tracker engine error %s", error->message);
         nautilus_search_provider_error (NAUTILUS_SEARCH_PROVIDER (tracker), error->message);
     }
     else
@@ -142,11 +156,11 @@ search_finished (NautilusSearchEngineTracker *tracker,
                                            NAUTILUS_SEARCH_PROVIDER_STATUS_NORMAL);
         if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
         {
-            DEBUG ("Tracker engine finished and cancelled");
+            g_debug ("Tracker engine finished and cancelled");
         }
         else
         {
-            DEBUG ("Tracker engine finished correctly");
+            g_debug ("Tracker engine finished correctly");
         }
     }
 
@@ -179,8 +193,9 @@ cursor_callback (GObject      *object,
     const char *uri;
     const char *mtime_str;
     const char *atime_str;
+    const char *ctime_str;
     const gchar *snippet;
-    GTimeVal tv;
+    g_autoptr (GTimeZone) tz = g_time_zone_new_local ();
     gdouble rank, match;
     gboolean success;
     gchar *basename;
@@ -195,6 +210,7 @@ cursor_callback (GObject      *object,
         search_finished (tracker, error);
 
         g_clear_error (&error);
+        tracker_sparql_cursor_close (cursor);
         g_clear_object (&cursor);
 
         return;
@@ -204,7 +220,8 @@ cursor_callback (GObject      *object,
     uri = tracker_sparql_cursor_get_string (cursor, 0, NULL);
     rank = tracker_sparql_cursor_get_double (cursor, 1);
     mtime_str = tracker_sparql_cursor_get_string (cursor, 2, NULL);
-    atime_str = tracker_sparql_cursor_get_string (cursor, 3, NULL);
+    ctime_str = tracker_sparql_cursor_get_string (cursor, 3, NULL);
+    atime_str = tracker_sparql_cursor_get_string (cursor, 4, NULL);
     basename = g_path_get_basename (uri);
 
     hit = nautilus_search_hit_new (uri);
@@ -214,31 +231,52 @@ cursor_callback (GObject      *object,
 
     if (tracker->fts_enabled)
     {
-        snippet = tracker_sparql_cursor_get_string (cursor, 4, NULL);
-        nautilus_search_hit_set_fts_snippet (hit, snippet);
+        snippet = tracker_sparql_cursor_get_string (cursor, 5, NULL);
+        if (snippet != NULL)
+        {
+            g_autofree gchar *escaped = NULL;
+            g_autoptr (GString) buffer = NULL;
+            /* Escape for markup, before adding our own markup. */
+            escaped = g_markup_escape_text (snippet, -1);
+            buffer = g_string_new (escaped);
+            g_string_replace (buffer, "_NAUTILUS_SNIPPET_DELIM_START_", "<b>", 0);
+            g_string_replace (buffer, "_NAUTILUS_SNIPPET_DELIM_END_", "</b>", 0);
+
+            nautilus_search_hit_set_fts_snippet (hit, buffer->str);
+        }
     }
 
-    if (g_time_val_from_iso8601 (mtime_str, &tv))
+    if (mtime_str != NULL)
     {
-        GDateTime *date;
-        date = g_date_time_new_from_timeval_local (&tv);
+        g_autoptr (GDateTime) date = g_date_time_new_from_iso8601 (mtime_str, tz);
+
+        if (date == NULL)
+        {
+            g_warning ("unable to parse mtime: %s", mtime_str);
+        }
         nautilus_search_hit_set_modification_time (hit, date);
-        g_date_time_unref (date);
     }
-    else
+
+    if (atime_str != NULL)
     {
-        g_warning ("unable to parse mtime: %s", mtime_str);
-    }
-    if (g_time_val_from_iso8601 (atime_str, &tv))
-    {
-        GDateTime *date;
-        date = g_date_time_new_from_timeval_local (&tv);
+        g_autoptr (GDateTime) date = g_date_time_new_from_iso8601 (atime_str, tz);
+
+        if (date == NULL)
+        {
+            g_warning ("unable to parse atime: %s", atime_str);
+        }
         nautilus_search_hit_set_access_time (hit, date);
-        g_date_time_unref (date);
     }
-    else
+
+    if (ctime_str != NULL)
     {
-        g_warning ("unable to parse atime: %s", atime_str);
+        g_autoptr (GDateTime) date = g_date_time_new_from_iso8601 (ctime_str, tz);
+
+        if (date == NULL)
+        {
+            g_warning ("unable to parse ctime: %s", ctime_str);
+        }
+        nautilus_search_hit_set_creation_time (hit, date);
     }
 
     g_queue_push_head (tracker->hits_pending, hit);
@@ -254,16 +292,16 @@ query_callback (GObject      *object,
                 gpointer      user_data)
 {
     NautilusSearchEngineTracker *tracker;
-    TrackerSparqlConnection *connection;
+    TrackerSparqlStatement *stmt;
     TrackerSparqlCursor *cursor;
     GError *error = NULL;
 
     tracker = NAUTILUS_SEARCH_ENGINE_TRACKER (user_data);
 
-    connection = TRACKER_SPARQL_CONNECTION (object);
-    cursor = tracker_sparql_connection_query_finish (connection,
-                                                     result,
-                                                     &error);
+    stmt = TRACKER_SPARQL_STATEMENT (object);
+    cursor = tracker_sparql_statement_execute_finish (stmt,
+                                                      result,
+                                                      &error);
 
     if (error != NULL)
     {
@@ -281,28 +319,169 @@ search_finished_idle (gpointer user_data)
 {
     NautilusSearchEngineTracker *tracker = user_data;
 
-    DEBUG ("Tracker engine finished idle");
+    g_debug ("Tracker engine finished idle");
 
     search_finished (tracker, NULL);
 
     return FALSE;
 }
 
-/* This is used to compensate rank if fts:rank is not set (resp. fts:match is
- * not used). The value was determined experimentally. I am convinced that
- * fts:rank is currently always set to 5.0 in case of filename match.
- */
-#define FILENAME_RANK "5.0"
+static TrackerSparqlStatement *
+create_statement (NautilusSearchProvider *provider,
+                  SearchFeatures          features)
+{
+    NautilusSearchEngineTracker *tracker;
+    GString *sparql;
+    TrackerSparqlStatement *stmt;
+
+    tracker = NAUTILUS_SEARCH_ENGINE_TRACKER (provider);
+
+#define VARIABLES \
+        " ?url" \
+        " ?rank"  \
+        " ?mtime" \
+        " ?ctime" \
+        " ?atime" \
+        " ?snippet"
+
+#define TRIPLE_PATTERN \
+        "?file a nfo:FileDataObject;" \
+        "  nfo:fileLastModified ?mtime;" \
+        "  nfo:fileLastAccessed ?atime;" \
+        "  nfo:fileCreated ?ctime;" \
+        "  nie:url ?url."
+
+    sparql = g_string_new ("SELECT DISTINCT " VARIABLES " WHERE {");
+
+    if (features & SEARCH_FEATURE_MIMETYPE)
+    {
+        g_string_append (sparql,
+                         "  GRAPH ?g {"
+                         "    ?content nie:isStoredAs ?file;"
+                         "      nie:mimeType ?mime"
+                         "  }");
+    }
+
+    if (features & SEARCH_FEATURE_TERMS)
+    {
+        if (features & SEARCH_FEATURE_CONTENT)
+        {
+            g_string_append (sparql,
+                             " { "
+                             "   SELECT ?file " VARIABLES " {"
+                             "     GRAPH tracker:Documents {"
+                             "       ?file a nfo:FileDataObject ."
+                             "       ?content nie:isStoredAs ?file ."
+                             "       ?content fts:match ~match ."
+                             "       BIND(fts:rank(?content) AS ?rank) ."
+                             "       BIND(fts:snippet(?content,"
+                             "                        '_NAUTILUS_SNIPPET_DELIM_START_',"
+                             "                        '_NAUTILUS_SNIPPET_DELIM_END_',"
+                             "                        '…',"
+                             "                        20) AS ?snippet)"
+                             "     }"
+                             "     GRAPH tracker:FileSystem {"
+                             TRIPLE_PATTERN
+                             "     }"
+                             "   }"
+                             "   ORDER BY DESC (?rank)"
+                             " } UNION");
+        }
+
+        /* Note: Do not be fooled by `fts:match` bellow. It matches only the
+         * filename here, unlike its usage above. This is because it's used
+         * with `nfo:FileDataObject`, not `nie:InformationElement`. The only
+         * full-text indexed property of `nfo:FileDataObject` is `nfo:fileName`.
+         */
+        g_string_append (sparql,
+                         " {"
+                         "   SELECT ?file " VARIABLES " {"
+                         "     GRAPH tracker:FileSystem {"
+                         TRIPLE_PATTERN
+                         "       ?file fts:match ~match ."
+                         "       BIND(fts:rank(?file) AS ?rank) ."
+                         "     }"
+                         "   }"
+                         "   ORDER BY DESC (?rank)"
+                         " }");
+    }
+    else
+    {
+        g_string_append (sparql,
+                         " GRAPH tracker:FileSystem {"
+                         TRIPLE_PATTERN
+                         "   BIND (0 AS ?rank)"
+                         " }");
+    }
+
+    g_string_append (sparql, " . FILTER( ");
+
+    if (!(features & SEARCH_FEATURE_LOCATION))
+    {
+        /* Global search. Match any location. */
+        g_string_append (sparql, "true");
+    }
+    else if (!(features & SEARCH_FEATURE_RECURSIVE))
+    {
+        g_string_append (sparql, "tracker:uri-is-parent(~location, ?url)");
+    }
+    else
+    {
+        /* STRSTARTS is faster than tracker:uri-is-descendant().
+         * See https://gitlab.gnome.org/GNOME/tracker/-/issues/243
+         */
+        g_string_append (sparql, "STRSTARTS(?url, CONCAT (~location, '/'))");
+    }
+
+    if (features &
+        (SEARCH_FEATURE_ATIME | SEARCH_FEATURE_MTIME | SEARCH_FEATURE_CTIME))
+    {
+        g_string_append (sparql, " && ");
+
+        if (features & SEARCH_FEATURE_ATIME)
+        {
+            g_string_append (sparql, "?atime >= ~startTime^^xsd:dateTime");
+            g_string_append (sparql, " && ?atime <= ~endTime^^xsd:dateTime");
+        }
+        else if (features & SEARCH_FEATURE_MTIME)
+        {
+            g_string_append (sparql, "?mtime >= ~startTime^^xsd:dateTime");
+            g_string_append (sparql, " && ?mtime <= ~endTime^^xsd:dateTime");
+        }
+        else if (features & SEARCH_FEATURE_CTIME)
+        {
+            g_string_append (sparql, "?ctime >= ~startTime^^xsd:dateTime");
+            g_string_append (sparql, " && ?ctime <= ~endTime^^xsd:dateTime");
+        }
+    }
+
+    if (features & SEARCH_FEATURE_MIMETYPE)
+    {
+        g_string_append (sparql, " && CONTAINS(~mimeTypes, ?mime)");
+    }
+
+    g_string_append (sparql, ")}");
+
+    stmt = tracker_sparql_connection_query_statement (tracker->connection,
+                                                      sparql->str,
+                                                      NULL,
+                                                      NULL);
+    g_string_free (sparql, TRUE);
+
+    return stmt;
+}
 
 static void
 nautilus_search_engine_tracker_start (NautilusSearchProvider *provider)
 {
     NautilusSearchEngineTracker *tracker;
-    gchar *query_text, *search_text, *location_uri, *downcase;
-    GFile *location;
-    GString *sparql;
+    g_autofree gchar *query_text = NULL;
     g_autoptr (GPtrArray) mimetypes = NULL;
-    GPtrArray *date_range;
+    g_autoptr (GPtrArray) date_range = NULL;
+    NautilusQuerySearchType type;
+    TrackerSparqlStatement *stmt;
+    SearchFeatures features = 0;
+    g_autoptr (GFile) location = NULL;
 
     tracker = NAUTILUS_SEARCH_ENGINE_TRACKER (provider);
 
@@ -311,7 +490,7 @@ nautilus_search_engine_tracker_start (NautilusSearchProvider *provider)
         return;
     }
 
-    DEBUG ("Tracker engine start");
+    g_debug ("Tracker engine start");
     g_object_ref (tracker);
     tracker->query_pending = TRUE;
 
@@ -326,88 +505,96 @@ nautilus_search_engine_tracker_start (NautilusSearchProvider *provider)
     tracker->fts_enabled = nautilus_query_get_search_content (tracker->query);
 
     query_text = nautilus_query_get_text (tracker->query);
-    downcase = g_utf8_strdown (query_text, -1);
-    search_text = tracker_sparql_escape_string (downcase);
-    g_free (query_text);
-    g_free (downcase);
-
-    location = nautilus_query_get_location (tracker->query);
-    location_uri = location ? g_file_get_uri (location) : NULL;
     mimetypes = nautilus_query_get_mime_types (tracker->query);
+    date_range = nautilus_query_get_date_range (tracker->query);
+    type = nautilus_query_get_search_type (tracker->query);
 
-    sparql = g_string_new ("SELECT DISTINCT"
-                           " ?url"
-                           " xsd:double(COALESCE(?rank2, ?rank1)) AS ?rank"
-                           " nfo:fileLastModified(?file)"
-                           " nfo:fileLastAccessed(?file)");
-
-    if (tracker->fts_enabled && *search_text)
+    if (*query_text)
     {
-        g_string_append (sparql, " fts:snippet(?content)");
+        features |= SEARCH_FEATURE_TERMS;
     }
-
-    g_string_append (sparql, "FROM tracker:FileSystem ");
-
     if (tracker->fts_enabled)
     {
-        g_string_append (sparql, "FROM tracker:Documents ");
+        features |= SEARCH_FEATURE_CONTENT;
+    }
+    if (tracker->recursive)
+    {
+        features |= SEARCH_FEATURE_RECURSIVE;
+    }
+    if (mimetypes->len > 0)
+    {
+        features |= SEARCH_FEATURE_MIMETYPE;
     }
 
-    g_string_append (sparql,
-                     "\nWHERE {"
-                     "  ?file a nfo:FileDataObject;"
-                     "  nfo:fileLastModified ?mtime;"
-                     "  nfo:fileLastAccessed ?atime;"
-                     "  nie:dataSource/tracker:available true;"
-                     "  nie:url ?url.");
+    if (date_range)
+    {
+        if (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS)
+        {
+            features |= SEARCH_FEATURE_ATIME;
+        }
+        else if (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_MODIFIED)
+        {
+            features |= SEARCH_FEATURE_MTIME;
+        }
+        else if (type == NAUTILUS_QUERY_SEARCH_TYPE_CREATED)
+        {
+            features |= SEARCH_FEATURE_CTIME;
+        }
+    }
+
+    location = nautilus_query_get_location (tracker->query);
+    if (location != NULL)
+    {
+        features |= SEARCH_FEATURE_LOCATION;
+    }
+
+    stmt = g_hash_table_lookup (tracker->statements, GUINT_TO_POINTER (features));
+
+    if (!stmt)
+    {
+        stmt = create_statement (provider, features);
+        g_hash_table_insert (tracker->statements,
+                             GUINT_TO_POINTER (features), stmt);
+    }
+
+    if (location != NULL)
+    {
+        g_autofree gchar *location_uri = g_file_get_uri (location);
+        tracker_sparql_statement_bind_string (stmt, "location", location_uri);
+    }
+
+    if (*query_text)
+    {
+        tracker_sparql_statement_bind_string (stmt, "match", query_text);
+    }
 
     if (mimetypes->len > 0)
     {
-        g_string_append (sparql,
-                         "  ?content nie:isStoredAs ?file;"
-                         "    nie:mimeType ?mime");
+        g_autoptr (GString) mimetype_str = NULL;
+
+        for (guint i = 0; i < mimetypes->len; i++)
+        {
+            const gchar *mimetype;
+
+            mimetype = g_ptr_array_index (mimetypes, i);
+
+            if (!mimetype_str)
+            {
+                mimetype_str = g_string_new (mimetype);
+            }
+            else
+            {
+                g_string_append_printf (mimetype_str, ",%s", mimetype);
+            }
+        }
+
+        tracker_sparql_statement_bind_string (stmt, "mimeTypes", mimetype_str->str);
     }
 
-    if (tracker->fts_enabled && *search_text)
-    {
-        /* Use fts:match only for content search to not lose some filename results due to stop words. */
-        g_string_append_printf (sparql,
-                                " { "
-                                " ?content nie:isStoredAs ?file ."
-                                " ?content fts:match \"%s*\" ."
-                                " BIND(fts:rank(?content) AS ?rank1) ."
-                                " } UNION",
-                                search_text);
-    }
-
-    g_string_append_printf (sparql,
-                            " {"
-                            " ?file nfo:fileName ?filename ."
-                            " FILTER(fn:contains(fn:lower-case(?filename), '%s')) ."
-                            " BIND(" FILENAME_RANK " AS ?rank2) ."
-                            " }",
-                            search_text);
-
-    g_string_append_printf (sparql, " . FILTER( ");
-
-    if (!tracker->recursive)
-    {
-        g_string_append_printf (sparql, "tracker:uri-is-parent('%s', ?url)", location_uri);
-    }
-    else
-    {
-        /* STRSTARTS is faster than tracker:uri-is-descendant().
-         * See https://gitlab.gnome.org/GNOME/tracker/-/issues/243
-         */
-        g_string_append_printf (sparql, "STRSTARTS(?url, '%s/')", location_uri);
-    }
-
-    date_range = nautilus_query_get_date_range (tracker->query);
     if (date_range)
     {
-        NautilusQuerySearchType type;
-        gchar *initial_date_format;
-        gchar *end_date_format;
+        g_autofree gchar *initial_date_format = NULL;
+        g_autofree gchar *end_date_format = NULL;
         GDateTime *initial_date;
         GDateTime *end_date;
         GDateTime *shifted_end_date;
@@ -418,59 +605,20 @@ nautilus_search_engine_tracker_start (NautilusSearchProvider *provider)
          * For that, add a day to it */
         shifted_end_date = g_date_time_add_days (end_date, 1);
 
-        type = nautilus_query_get_search_type (tracker->query);
         initial_date_format = g_date_time_format_iso8601 (initial_date);
         end_date_format = g_date_time_format_iso8601 (shifted_end_date);
 
-        g_string_append (sparql, " && ");
-
-        if (type == NAUTILUS_QUERY_SEARCH_TYPE_LAST_ACCESS)
-        {
-            g_string_append_printf (sparql, "?atime >= \"%s\"^^xsd:dateTime", initial_date_format);
-            g_string_append_printf (sparql, " && ?atime <= \"%s\"^^xsd:dateTime", end_date_format);
-        }
-        else
-        {
-            g_string_append_printf (sparql, "?mtime >= \"%s\"^^xsd:dateTime", initial_date_format);
-            g_string_append_printf (sparql, " && ?mtime <= \"%s\"^^xsd:dateTime", end_date_format);
-        }
-
-
-        g_free (initial_date_format);
-        g_free (end_date_format);
-        g_ptr_array_unref (date_range);
+        tracker_sparql_statement_bind_string (stmt, "startTime",
+                                              initial_date_format);
+        tracker_sparql_statement_bind_string (stmt, "endTime",
+                                              end_date_format);
     }
-
-    if (mimetypes->len > 0)
-    {
-        g_string_append (sparql, " && (");
-
-        for (gint i = 0; i < mimetypes->len; i++)
-        {
-            if (i != 0)
-            {
-                g_string_append (sparql, " || ");
-            }
-
-            g_string_append_printf (sparql, "fn:contains(?mime, '%s')",
-                                    (gchar *) g_ptr_array_index (mimetypes, i));
-        }
-        g_string_append (sparql, ")\n");
-    }
-
-    g_string_append (sparql, ")} ORDER BY DESC (?rank)");
 
     tracker->cancellable = g_cancellable_new ();
-    tracker_sparql_connection_query_async (tracker->connection,
-                                           sparql->str,
-                                           tracker->cancellable,
-                                           query_callback,
-                                           tracker);
-    g_string_free (sparql, TRUE);
-
-    g_free (search_text);
-    g_free (location_uri);
-    g_object_unref (location);
+    tracker_sparql_statement_execute_async (stmt,
+                                            tracker->cancellable,
+                                            query_callback,
+                                            tracker);
 }
 
 static void
@@ -482,7 +630,7 @@ nautilus_search_engine_tracker_stop (NautilusSearchProvider *provider)
 
     if (tracker->query_pending)
     {
-        DEBUG ("Tracker engine stop");
+        g_debug ("Tracker engine stop");
         g_cancellable_cancel (tracker->cancellable);
         g_clear_object (&tracker->cancellable);
         tracker->query_pending = FALSE;
@@ -495,18 +643,29 @@ static void
 nautilus_search_engine_tracker_set_query (NautilusSearchProvider *provider,
                                           NautilusQuery          *query)
 {
-    g_autoptr (GFile) location = NULL;
     NautilusSearchEngineTracker *tracker;
+    NautilusQueryRecursive recursive;
 
     tracker = NAUTILUS_SEARCH_ENGINE_TRACKER (provider);
-    location = nautilus_query_get_location (query);
+    recursive = nautilus_query_get_recursive (query);
 
     g_clear_object (&tracker->query);
 
     tracker->query = g_object_ref (query);
-    tracker->recursive = is_recursive_search (NAUTILUS_SEARCH_ENGINE_TYPE_INDEXED,
-                                              nautilus_query_get_recursive (query),
-                                              location);
+
+    if (recursive == NAUTILUS_QUERY_RECURSIVE_LOCAL_ONLY)
+    {
+        g_autoptr (GFile) location = nautilus_query_get_location (query);
+        g_autoptr (NautilusFile) location_file = (location != NULL ?
+                                                  nautilus_file_get (location) : NULL);
+
+        tracker->recursive = location_file != NULL && !nautilus_file_is_remote (location_file);
+    }
+    else
+    {
+        tracker->recursive = recursive == NAUTILUS_QUERY_RECURSIVE_ALWAYS ||
+                             recursive == NAUTILUS_QUERY_RECURSIVE_INDEXED_ONLY;
+    }
 }
 
 static gboolean
@@ -574,6 +733,8 @@ nautilus_search_engine_tracker_init (NautilusSearchEngineTracker *engine)
     GError *error = NULL;
 
     engine->hits_pending = g_queue_new ();
+    engine->statements = g_hash_table_new_full (NULL, NULL, NULL,
+                                                g_object_unref);
 
     engine->connection = nautilus_tracker_get_miner_fs_connection (&error);
     if (error)

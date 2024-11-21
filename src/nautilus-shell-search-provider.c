@@ -30,6 +30,7 @@
 
 #include "nautilus-file.h"
 #include "nautilus-file-utilities.h"
+#include "nautilus-scheme.h"
 #include "nautilus-search-engine.h"
 #include "nautilus-search-provider.h"
 #include "nautilus-ui-utilities.h"
@@ -60,12 +61,13 @@ struct _NautilusShellSearchProvider
 
     PendingSearch *current_search;
 
+    GList *metas_requests;
     GHashTable *metas_cache;
 };
 
 G_DEFINE_TYPE (NautilusShellSearchProvider, nautilus_shell_search_provider, G_TYPE_OBJECT)
 
-static gchar *
+static const char *
 get_display_name (NautilusShellSearchProvider *self,
                   NautilusFile                *file)
 {
@@ -81,7 +83,7 @@ get_display_name (NautilusShellSearchProvider *self,
 
     if (bookmark)
     {
-        return g_strdup (nautilus_bookmark_get_name (bookmark));
+        return nautilus_bookmark_get_name (bookmark);
     }
     else
     {
@@ -118,6 +120,7 @@ pending_search_free (PendingSearch *search)
 {
     g_hash_table_destroy (search->hits);
     g_clear_object (&search->query);
+    g_signal_handlers_disconnect_by_data (G_OBJECT (search->engine), search);
     g_clear_object (&search->engine);
     g_clear_object (&search->invocation);
 
@@ -147,7 +150,30 @@ cancel_current_search (NautilusShellSearchProvider *self)
 {
     if (self->current_search != NULL)
     {
-        nautilus_search_provider_stop (NAUTILUS_SEARCH_PROVIDER (self->current_search->engine));
+        NautilusSearchProvider *engine;
+
+        g_debug ("*** Cancel current search");
+
+        engine = NAUTILUS_SEARCH_PROVIDER (self->current_search->engine);
+        /* The finish signal may be emitted during the call to nautilus_search_provider_stop
+         * which causes shell_search_provider to free the engine. Increase
+         * the ref count to prevent use after free issues.
+         */
+        g_object_ref (engine);
+        nautilus_search_provider_stop (engine);
+        g_object_unref (engine);
+    }
+}
+
+static void
+cancel_current_search_ignoring_partial_results (NautilusShellSearchProvider *self)
+{
+    cancel_current_search (self);
+
+    if (self->current_search != NULL)
+    {
+        pending_search_finish (self->current_search, self->current_search->invocation,
+                               g_variant_new ("(as)", NULL));
     }
 }
 
@@ -317,7 +343,7 @@ search_add_volumes_and_bookmarks (PendingSearch *search)
     g_free (uri);
 
     /* trash */
-    candidate = search_hit_candidate_new ("trash:///", _("Trash"));
+    candidate = search_hit_candidate_new (SCHEME_TRASH ":///", _("Trash"));
     candidates = g_list_prepend (candidates, candidate);
 
     /* now add mounts */
@@ -430,15 +456,15 @@ static NautilusQuery *
 shell_query_new (gchar **terms)
 {
     NautilusQuery *query;
-    g_autoptr (GFile) home = NULL;
     g_autofree gchar *terms_joined = NULL;
 
     terms_joined = g_strjoinv (" ", terms);
-    home = g_file_new_for_path (g_get_home_dir ());
 
     query = nautilus_query_new ();
     nautilus_query_set_text (query, terms_joined);
-    nautilus_query_set_location (query, home);
+    /* Global search is not limited by location. */
+    nautilus_query_set_location (query, NULL);
+    nautilus_query_set_recursive (query, NAUTILUS_QUERY_RECURSIVE_INDEXED_ONLY);
 
     return query;
 }
@@ -462,7 +488,6 @@ execute_search (NautilusShellSearchProvider  *self,
     }
 
     query = shell_query_new (terms);
-    nautilus_query_set_recursive (query, NAUTILUS_QUERY_RECURSIVE_INDEXED_ONLY);
     nautilus_query_set_show_hidden_files (query, FALSE);
 
     pending_search = g_slice_new0 (PendingSearch);
@@ -487,6 +512,7 @@ execute_search (NautilusShellSearchProvider  *self,
 
     /* start searching */
     g_debug ("*** Search engine search started");
+    nautilus_search_engine_enable_recent (pending_search->engine);
     nautilus_search_provider_set_query (NAUTILUS_SEARCH_PROVIDER (pending_search->engine),
                                         query);
     nautilus_search_provider_start (NAUTILUS_SEARCH_PROVIDER (pending_search->engine));
@@ -524,6 +550,7 @@ typedef struct
     NautilusShellSearchProvider *self;
 
     gint64 start_time;
+    NautilusFileListHandle *handle;
     GDBusMethodInvocation *invocation;
 
     gchar **uris;
@@ -532,6 +559,7 @@ typedef struct
 static void
 result_metas_data_free (ResultMetasData *data)
 {
+    g_clear_pointer (&data->handle, nautilus_file_list_cancel_call_when_ready);
     g_clear_object (&data->self);
     g_clear_object (&data->invocation);
     g_strfreev (data->uris);
@@ -549,11 +577,14 @@ result_metas_return_from_cache (ResultMetasData *data)
 
     g_variant_builder_init (&builder, G_VARIANT_TYPE ("aa{sv}"));
 
-    for (idx = 0; data->uris[idx] != NULL; idx++)
+    if (data->uris)
     {
-        meta = g_hash_table_lookup (data->self->metas_cache,
-                                    data->uris[idx]);
-        g_variant_builder_add_value (&builder, meta);
+        for (idx = 0; data->uris[idx] != NULL; idx++)
+        {
+            meta = g_hash_table_lookup (data->self->metas_cache,
+                                        data->uris[idx]);
+            g_variant_builder_add_value (&builder, meta);
+        }
     }
 
     current_time = g_get_monotonic_time ();
@@ -565,26 +596,46 @@ result_metas_return_from_cache (ResultMetasData *data)
 }
 
 static void
+result_metas_return_empty (ResultMetasData *data)
+{
+    g_clear_pointer (&data->uris, g_strfreev);
+    result_metas_return_from_cache (data);
+    result_metas_data_free (data);
+}
+
+static void
+cancel_result_meta_requests (NautilusShellSearchProvider *self)
+{
+    g_debug ("*** Cancel Results Meta requests");
+
+    g_list_free_full (self->metas_requests,
+                      (GDestroyNotify) result_metas_return_empty);
+    self->metas_requests = NULL;
+}
+
+static void
 result_list_attributes_ready_cb (GList    *file_list,
                                  gpointer  user_data)
 {
     ResultMetasData *data = user_data;
     GVariantBuilder meta;
     NautilusFile *file;
-    GFile *file_location;
     GList *l;
-    gchar *uri, *display_name;
+    gchar *uri;
+    const char *display_name;
     gchar *path, *description;
-    gchar *thumbnail_path;
     GIcon *gicon;
     GFile *location;
     GVariant *meta_variant;
     gint icon_scale;
 
-    icon_scale = gdk_monitor_get_scale_factor (gdk_display_get_monitor (gdk_display_get_default (), 0));
+    icon_scale = gdk_monitor_get_scale_factor (g_list_model_get_item (gdk_display_get_monitors (gdk_display_get_default ()), 0));
 
     for (l = file_list; l != NULL; l = l->next)
     {
+        g_autoptr (GFile) file_location = NULL;
+        g_autoptr (GVariant) icon_variant = NULL;
+
         file = l->data;
         g_variant_builder_init (&meta, G_VARIANT_TYPE ("a{sv}"));
 
@@ -603,14 +654,13 @@ result_list_attributes_ready_cb (GList    *file_list,
                                "description", g_variant_new_string (description ? description : uri));
 
         gicon = NULL;
-        thumbnail_path = nautilus_file_get_thumbnail_path (file);
 
+        const char *thumbnail_path = nautilus_file_get_thumbnail_path (file);
         if (thumbnail_path != NULL)
         {
             location = g_file_new_for_path (thumbnail_path);
             gicon = g_file_icon_new (location);
 
-            g_free (thumbnail_path);
             g_object_unref (location);
         }
         else
@@ -620,24 +670,27 @@ result_list_attributes_ready_cb (GList    *file_list,
 
         if (gicon == NULL)
         {
-            gicon = G_ICON (nautilus_file_get_icon_pixbuf (file, 128, TRUE,
-                                                           icon_scale,
-                                                           NAUTILUS_FILE_ICON_FLAGS_USE_THUMBNAILS));
+            gicon = G_ICON (nautilus_file_get_icon_texture (file, 128,
+                                                            icon_scale,
+                                                            NAUTILUS_FILE_ICON_FLAGS_USE_THUMBNAILS));
         }
 
+        icon_variant = g_icon_serialize (gicon);
         g_variant_builder_add (&meta, "{sv}",
-                               "icon", g_icon_serialize (gicon));
+                               "icon", icon_variant);
         g_object_unref (gicon);
 
         meta_variant = g_variant_builder_end (&meta);
         g_hash_table_insert (data->self->metas_cache,
                              g_strdup (uri), g_variant_ref_sink (meta_variant));
 
-        g_free (display_name);
         g_free (path);
         g_free (description);
         g_free (uri);
     }
+
+    data->handle = NULL;
+    data->self->metas_requests = g_list_remove (data->self->metas_requests, data);
 
     result_metas_return_from_cache (data);
     result_metas_data_free (data);
@@ -682,11 +735,37 @@ handle_get_result_metas (NautilusShellSearchProvider2  *skeleton,
 
     nautilus_file_list_call_when_ready (missing_files,
                                         NAUTILUS_FILE_ATTRIBUTES_FOR_ICON,
-                                        NULL,
+                                        &data->handle,
                                         result_list_attributes_ready_cb,
                                         data);
+    self->metas_requests = g_list_prepend (self->metas_requests, data);
     nautilus_file_list_free (missing_files);
     return TRUE;
+}
+
+typedef struct
+{
+    GFile *file;
+    NautilusShellSearchProvider2 *skeleton;
+    GDBusMethodInvocation *invocation;
+} ShowURIData;
+
+static void
+show_uri_callback (GObject      *source_object,
+                   GAsyncResult *result,
+                   gpointer      user_data)
+{
+    ShowURIData *data = user_data;
+
+    if (!gtk_show_uri_full_finish (NULL, result, NULL))
+    {
+        g_application_open (g_application_get_default (), &data->file, 1, "");
+    }
+
+    nautilus_shell_search_provider2_complete_activate_result (data->skeleton, data->invocation);
+
+    g_object_unref (data->file);
+    g_free (data);
 }
 
 static gboolean
@@ -697,19 +776,15 @@ handle_activate_result (NautilusShellSearchProvider2  *skeleton,
                         guint32                        timestamp,
                         gpointer                       user_data)
 {
-    gboolean res;
-    GFile *file;
+    ShowURIData *data;
 
-    res = gtk_show_uri_on_window (NULL, result, timestamp, NULL);
+    data = g_new (ShowURIData, 1);
+    data->file = g_file_new_for_uri (result);
+    data->skeleton = skeleton;
+    data->invocation = invocation;
 
-    if (!res)
-    {
-        file = g_file_new_for_uri (result);
-        g_application_open (g_application_get_default (), &file, 1, "");
-        g_object_unref (file);
-    }
+    gtk_show_uri_full (NULL, result, timestamp, NULL, show_uri_callback, data);
 
-    nautilus_shell_search_provider2_complete_activate_result (skeleton, invocation);
     return TRUE;
 }
 
@@ -722,24 +797,6 @@ handle_launch_search (NautilusShellSearchProvider2  *skeleton,
 {
     GApplication *app = g_application_get_default ();
     g_autoptr (NautilusQuery) query = shell_query_new (terms);
-    NautilusQueryRecursive recursive = location_settings_search_get_recursive ();
-
-    /*
-     * If no recursive search is enabled, we still want to be able to
-     * show the same results we presented in the overview when nautilus
-     * is explicitly launched to access to more results, and thus we perform
-     * a query showing results coming from index-based search engines.
-     * Otherwise we respect the global setting for recursivity.
-     */
-    if (recursive == NAUTILUS_QUERY_RECURSIVE_NEVER)
-    {
-        nautilus_query_set_recursive (query,
-                                      NAUTILUS_QUERY_RECURSIVE_INDEXED_ONLY);
-    }
-    else
-    {
-        nautilus_query_set_recursive (query, recursive);
-    }
 
     nautilus_application_search (NAUTILUS_APPLICATION (app), query);
 
@@ -754,7 +811,8 @@ search_provider_dispose (GObject *obj)
 
     g_clear_object (&self->skeleton);
     g_hash_table_destroy (self->metas_cache);
-    cancel_current_search (self);
+    cancel_current_search_ignoring_partial_results (self);
+    cancel_result_meta_requests (self);
 
     G_OBJECT_CLASS (nautilus_shell_search_provider_parent_class)->dispose (obj);
 }

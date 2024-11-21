@@ -42,7 +42,7 @@ static gboolean call_consume_changes_idle_id = 0;
 static gboolean
 call_consume_changes_idle_cb (gpointer not_used)
 {
-    nautilus_file_changes_consume_changes (TRUE);
+    nautilus_file_changes_consume_changes ();
     call_consume_changes_idle_id = 0;
     return FALSE;
 }
@@ -66,10 +66,10 @@ mount_removed (GVolumeMonitor *volume_monitor,
     GFile *mount_location;
 
     mount_location = g_mount_get_root (mount);
-
-    if (g_file_has_prefix (monitor->location, mount_location))
+    if (g_file_equal (monitor->location, mount_location) ||
+        g_file_has_prefix (monitor->location, mount_location))
     {
-        nautilus_file_changes_queue_file_removed (monitor->location);
+        nautilus_file_changes_queue_file_unmounted (monitor->location);
         schedule_call_consume_changes ();
     }
 
@@ -108,6 +108,11 @@ dir_changed (GFileMonitor      *monitor,
         break;
 
         case G_FILE_MONITOR_EVENT_UNMOUNTED:
+        {
+            nautilus_file_changes_queue_file_unmounted (child);
+        }
+        break;
+
         case G_FILE_MONITOR_EVENT_DELETED:
         {
             nautilus_file_changes_queue_file_removed (child);
@@ -139,7 +144,12 @@ nautilus_monitor_directory (GFile *location)
     {
         ret->monitor = dir_monitor;
     }
-    else if (!g_file_is_native (location))
+
+    /* Currently, some GVfs backends which support monitoring never emit
+     * G_FILE_MONITOR_EVENT_UNMOUNTED, nor _DELETED events when the location
+     * is unmounted. Use GVolumeMonitor in addition to GFileMonitor.
+     */
+    if (!g_file_is_native (location))
     {
         ret->location = g_object_ref (location);
         ret->volume_monitor = g_volume_monitor_get ();

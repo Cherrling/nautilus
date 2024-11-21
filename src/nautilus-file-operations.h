@@ -49,8 +49,6 @@ typedef void (* NautilusUnmountCallback)   (gpointer    callback_data);
 typedef void (* NautilusExtractCallback)   (GList    *outputs,
                                             gpointer  callback_data);
 
-/* FIXME: int copy_action should be an enum */
-
 void nautilus_file_operations_copy_move   (const GList                    *item_uris,
                                            const char                     *target_dir_uri,
                                            GdkDragAction                   copy_action,
@@ -70,8 +68,8 @@ void nautilus_file_operations_new_folder  (GtkWidget                      *paren
 void nautilus_file_operations_new_file    (GtkWidget                 *parent_view,
 					   const char                *parent_dir,
 					   const char                *target_filename,
-					   const char                *initial_contents,
-					   int                        length,
+					   const void                *initial_contents,
+					   gsize                      length,
 					   NautilusCreateCallback     done_callback,
 					   gpointer                   data);
 void nautilus_file_operations_new_file_from_template (GtkWidget               *parent_view,
@@ -164,3 +162,19 @@ void nautilus_file_operations_compress (GList                          *files,
                                         NautilusFileOperationsDBusData *dbus_data,
                                         NautilusCreateCallback          done_callback,
                                         gpointer                        done_callback_data);
+
+void
+nautilus_file_operations_paste_image_from_clipboard (GtkWidget                      *parent_view,
+                                                    NautilusFileOperationsDBusData *dbus_data,
+                                                    const char                     *parent_dir_uri,
+                                                    NautilusCopyCallback            done_callback,
+                                                    gpointer                        done_callback_data);
+
+void
+nautilus_file_operations_save_image_from_texture (GtkWidget                      *parent_view,
+                                                  NautilusFileOperationsDBusData *dbus_data,
+                                                  const char                     *parent_dir_uri,
+                                                  const char                     *base_name,
+                                                  GdkTexture                     *texture,
+                                                  NautilusCopyCallback            done_callback,
+                                                  gpointer                        done_callback_data);

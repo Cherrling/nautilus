@@ -1,16 +1,17 @@
-trackertestutils = dependency('tracker-testutils-3.0')
-
-tracker_sandbox = find_program(trackertestutils.get_pkgconfig_variable('command'))
+tracker_sandbox = find_program('localsearch')
 
 tests = [
-  ['test-file-utilities-get-common-filename-prefix', [
-    'test-file-utilities-get-common-filename-prefix.c'
+  ['test-directory', [
+    'test-directory.c'
   ]],
-  ['test-eel-string-get-common-prefix', [
-    'test-eel-string-get-common-prefix.c'
+  ['test-file', [
+    'test-file.c'
   ]],
-  ['test-file-utilities', [
-    'test-file-utilities.c'
+  ['test-file-metadata', [
+    'test-file-metadata.c'
+  ]],
+  ['test-file-operations-copy-files', [
+    'test-file-operations-copy-files.c'
   ]],
   ['test-file-operations-dir-has-files', [
     'test-file-operations-dir-has-files.c'
@@ -18,21 +19,30 @@ tests = [
   ['test-file-operations-move-files', [
     'test-file-operations-move-files.c'
   ]],
+  ['test-file-operations-trash-or-delete', [
+    'test-file-operations-trash-or-delete.c'
+  ]],
+  ['test-file-utilities-get-common-filename-prefix', [
+    'test-file-utilities-get-common-filename-prefix.c'
+  ]],
+  ['test-filename-common-prefix', [
+    'test-filename-common-prefix.c'
+  ]],
+  ['test-filename-utilities', [
+    'test-filename-utilities.c'
+  ]],
   ['test-nautilus-search-engine', [
     'test-nautilus-search-engine.c'
-  ]],
-  ['test-nautilus-search-engine-simple', [
-    'test-nautilus-search-engine-simple.c'
   ]],
   ['test-nautilus-search-engine-model', [
     'test-nautilus-search-engine-model.c'
   ]],
-  ['test-file-operations-copy-files', [
-    'test-file-operations-copy-files.c'
+  ['test-nautilus-search-engine-simple', [
+    'test-nautilus-search-engine-simple.c'
   ]],
-  ['test-file-operations-trash-or-delete', [
-    'test-file-operations-trash-or-delete.c'
-  ]]
+  ['test-ui-utilities', [
+    'test-ui-utilities.c'
+  ]],
 ]
 
 tracker_tests = [
@@ -63,7 +73,7 @@ foreach t: tracker_tests
   test(
     t[0],
     tracker_sandbox,
-    args: ['--store-tmpdir', '--index-recursive-tmpdir', test_exe],
+    args: ['test-sandbox', '--store-tmpdir', '--index-recursive-tmpdir', test_exe],
     env: [
       test_env,
       'G_TEST_BUILDDIR=@0@'.format(meson.current_build_dir()),

@@ -1,2 +1,3 @@
-multiarch_fallback.patch
-
+skip-tracker-test.patch
+Revert-tests-Use-localsearch3-test-sandbox.patch
+Revert-general-React-to-tracker-projects-rename.patch

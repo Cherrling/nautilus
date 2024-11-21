@@ -23,9 +23,11 @@
 #include "nautilus-column-utilities.h"
 
 #include <string.h>
-#include <eel/eel-glib-extensions.h>
 #include <glib/gi18n.h>
 #include <nautilus-extension.h>
+#include "nautilus-file.h"
+#include "nautilus-global-preferences.h"
+#include "nautilus-metadata.h"
 #include "nautilus-module.h"
 
 static const char *default_column_order[] =
@@ -37,14 +39,22 @@ static const char *default_column_order[] =
     "group",
     "permissions",
     "detailed_type",
-    "where",
-    "date_modified_with_time",
     "date_modified",
     "date_accessed",
     "date_created",
     "recency",
     "starred",
     NULL
+};
+
+static const char *default_columns_for_recent[] =
+{
+    "name", "size", "recency", NULL
+};
+
+static const char *default_columns_for_trash[] =
+{
+    "name", "size", "trashed_on", NULL
 };
 
 static GList *
@@ -130,23 +140,6 @@ get_builtin_columns (void)
                                            "attribute", "permissions",
                                            "label", _("Permissions"),
                                            "description", _("The permissions of the file."),
-                                           NULL));
-
-    columns = g_list_append (columns,
-                             g_object_new (NAUTILUS_TYPE_COLUMN,
-                                           "name", "where",
-                                           "attribute", "where",
-                                           "label", _("Location"),
-                                           "description", _("The location of the file."),
-                                           NULL));
-
-    columns = g_list_append (columns,
-                             g_object_new (NAUTILUS_TYPE_COLUMN,
-                                           "name", "date_modified_with_time",
-                                           "attribute", "date_modified_with_time",
-                                           "label", _("Modified — Time"),
-                                           "description", _("The date the file was modified."),
-                                           "xalign", 1.0,
                                            NULL));
 
     columns = g_list_append (columns,
@@ -413,4 +406,82 @@ nautilus_sort_columns (GList  *columns,
     return g_list_sort_with_data (columns,
                                   (GCompareDataFunc) column_compare,
                                   column_order);
+}
+
+void
+nautilus_column_save_metadata (NautilusFile *file,
+                               GStrv         column_order,
+                               GStrv         visible_columns)
+{
+    nautilus_file_set_metadata_list (file,
+                                     NAUTILUS_METADATA_KEY_LIST_VIEW_VISIBLE_COLUMNS,
+                                     visible_columns);
+    nautilus_file_set_metadata_list (file,
+                                     NAUTILUS_METADATA_KEY_LIST_VIEW_COLUMN_ORDER,
+                                     column_order);
+}
+
+GStrv
+nautilus_column_get_default_visible_columns (NautilusFile *file)
+{
+    if (nautilus_file_is_in_trash (file))
+    {
+        return g_strdupv ((gchar **) default_columns_for_trash);
+    }
+
+    if (nautilus_file_is_in_recent (file))
+    {
+        return g_strdupv ((gchar **) default_columns_for_recent);
+    }
+
+    return g_settings_get_strv (nautilus_list_view_preferences,
+                                NAUTILUS_PREFERENCES_LIST_VIEW_DEFAULT_VISIBLE_COLUMNS);
+}
+
+GStrv
+nautilus_column_get_visible_columns (NautilusFile *file)
+{
+    g_autofree gchar **visible_columns = NULL;
+
+    visible_columns = nautilus_file_get_metadata_list (file,
+                                                       NAUTILUS_METADATA_KEY_LIST_VIEW_VISIBLE_COLUMNS);
+    if (visible_columns == NULL || visible_columns[0] == NULL)
+    {
+        return nautilus_column_get_default_visible_columns (file);
+    }
+
+    return g_steal_pointer (&visible_columns);
+}
+
+GStrv
+nautilus_column_get_default_column_order (NautilusFile *file)
+{
+    if (nautilus_file_is_in_trash (file))
+    {
+        return g_strdupv ((gchar **) default_columns_for_trash);
+    }
+
+    if (nautilus_file_is_in_recent (file))
+    {
+        return g_strdupv ((gchar **) default_columns_for_recent);
+    }
+
+    return g_settings_get_strv (nautilus_list_view_preferences,
+                                NAUTILUS_PREFERENCES_LIST_VIEW_DEFAULT_COLUMN_ORDER);
+}
+
+GStrv
+nautilus_column_get_column_order (NautilusFile *file)
+{
+    g_autofree gchar **column_order = NULL;
+
+    column_order = nautilus_file_get_metadata_list (file,
+                                                    NAUTILUS_METADATA_KEY_LIST_VIEW_COLUMN_ORDER);
+
+    if (column_order != NULL && column_order[0] != NULL)
+    {
+        return g_steal_pointer (&column_order);
+    }
+
+    return nautilus_column_get_default_column_order (file);
 }

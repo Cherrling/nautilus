@@ -13,7 +13,7 @@ install_data(
   rename: '@0@-symbolic.svg'.format(application_id)
 )
 
-po_dir = join_paths(meson.source_root(), 'po')
+po_dir = join_paths(meson.project_source_root(), 'po')
 
 desktop_conf = configuration_data()
 
@@ -41,17 +41,38 @@ desktop_autorun_software = i18n.merge_file(
   type: 'desktop'
 )
 
+# get current date, used as build date for snapshots between releases
+today = 'unknown'
+date = find_program('date', required: false)
+# Only set dates for nightly builds to make release builds reproducible
+if date.found() and profile == 'Devel'
+  r = run_command(date, '-I')
+  if r.returncode() == 0
+    today = r.stdout().strip()
+  endif
+endif
+
 appdata_conf = configuration_data()
 
 appdata_conf.set('appid', application_id)
+appdata_conf.set('build-date', today)
+
+release_version = meson.project_version()
+python = find_program('python3', required: false)
+if python.found()
+  args = '''exec("import re\nprint(re.sub(r'^(.+)(\\.)([a-z]+.*)$', r'\\1~\\3', '@0@'))")'''
+  args = args.format(meson.project_version())
+  release_version = run_command(python, '-c', args).stdout().strip()
+endif
+appdata_conf.set('release-version', release_version)
 
 appdata = i18n.merge_file(
   input: configure_file(
-    input: files('org.gnome.Nautilus.appdata.xml.in.in'),
-    output: 'org.gnome.Nautilus.appdata.xml.in',
+    input: files('org.gnome.Nautilus.metainfo.xml.in.in'),
+    output: 'org.gnome.Nautilus.metainfo.xml.in',
     configuration: appdata_conf
   ),
-  output: '@0@.appdata.xml'.format(application_id),
+  output: '@0@.metainfo.xml'.format(application_id),
   install: true,
   install_dir: join_paths(datadir, 'metainfo'),
   po_dir: po_dir
@@ -121,12 +142,12 @@ if desktop_file_validate.found()
   )
 endif
 
-appstream_util = find_program('appstream-util', required: false)
-if appstream_util.found()
+appstreamcli = find_program('appstreamcli', required: false)
+if appstreamcli.found()
   test(
-    'validate-appdata', appstream_util,
+    'validate-appdata', appstreamcli,
     args: [
-      'validate-relax', '--nonet', appdata.full_path()
+      'validate', '--no-net', appdata.full_path()
     ],
     depends: [
       appdata,

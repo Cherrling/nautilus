@@ -18,18 +18,15 @@
  *
  *  Authors: Maciej Stachowiak <mjs@eazel.com>
  */
+#define G_LOG_DOMAIN "nautilus-mime"
 
 #include "nautilus-mime-actions.h"
 
 #include <eel/eel-stock-dialogs.h>
-#include <eel/eel-string.h>
 #include <glib.h>
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
 #include <string.h>
-
-#define DEBUG_FLAG NAUTILUS_DEBUG_MIME
-#include "nautilus-debug.h"
 
 #include "nautilus-application.h"
 #include "nautilus-enums.h"
@@ -37,11 +34,10 @@
 #include "nautilus-file-utilities.h"
 #include "nautilus-file-operations.h"
 #include "nautilus-global-preferences.h"
-#include "nautilus-metadata.h"
 #include "nautilus-program-choosing.h"
+#include "nautilus-scheme.h"
 #include "nautilus-signaller.h"
 #include "nautilus-ui-utilities.h"
-#include "nautilus-window.h"
 #include "nautilus-window-slot.h"
 
 typedef enum
@@ -76,20 +72,20 @@ typedef struct
     GList *mountables;
     GList *start_mountables;
     GList *not_mounted;
-    NautilusWindowOpenFlags flags;
+    NautilusOpenFlags flags;
     char *timed_wait_prompt;
     gboolean timed_wait_active;
     NautilusFileListHandle *files_handle;
     gboolean tried_mounting;
     char *activation_directory;
     gboolean user_confirmation;
+    GQueue *open_in_view_files;
+    GQueue *open_in_app_uris;
+    GQueue *launch_files;
+    GQueue *launch_in_terminal_files;
+    GList *open_in_app_parameters;
+    GList *unhandled_open_in_app_uris;
 } ActivateParameters;
-
-typedef struct
-{
-    ActivateParameters *activation_params;
-    GQueue *uris;
-} ApplicationLaunchAsyncParameters;
 
 /* Microsoft mime types at https://blogs.msdn.microsoft.com/vsofficedeveloper/2008/05/08/office-2007-file-format-mime-types-for-http-content-streaming-2/ */
 struct
@@ -104,122 +100,165 @@ struct
     },
     {
         N_("Files"),
-        { "application/octet-stream",
-          "text/plain",
-          NULL}
+        {
+            "application/octet-stream",
+            "text/plain",
+            "text/markdown",
+            NULL
+        }
     },
     {
         N_("Folders"),
-        { "inode/directory",
-          NULL}
+        {
+            "inode/directory",
+            NULL
+        }
     },
-    { N_("Documents"),
-      { "application/rtf",
-        "application/msword",
-        "application/vnd.sun.xml.writer",
-        "application/vnd.sun.xml.writer.global",
-        "application/vnd.sun.xml.writer.template",
-        "application/vnd.oasis.opendocument.text",
-        "application/vnd.oasis.opendocument.text-template",
-        "application/x-abiword",
-        "application/x-applix-word",
-        "application/x-mswrite",
-        "application/docbook+xml",
-        "application/x-kword",
-        "application/x-kword-crypt",
-        "application/x-lyx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        NULL}},
-    { N_("Illustration"),
-      { "application/illustrator",
-        "application/vnd.corel-draw",
-        "application/vnd.stardivision.draw",
-        "application/vnd.oasis.opendocument.graphics",
-        "application/x-dia-diagram",
-        "application/x-karbon",
-        "application/x-killustrator",
-        "application/x-kivio",
-        "application/x-kontour",
-        "application/x-wpg",
-        NULL}},
-    { N_("Music"),
-      { "application/ogg",
-        "audio/x-vorbis+ogg",
-        "audio/ac3",
-        "audio/basic",
-        "audio/midi",
-        "audio/x-flac",
-        "audio/mp4",
-        "audio/mpeg",
-        "audio/x-mpeg",
-        "audio/x-ms-asx",
-        "audio/x-pn-realaudio",
-        NULL}},
-    { N_("PDF / PostScript"),
-      { "application/pdf",
-        "application/postscript",
-        "application/x-dvi",
-        "image/x-eps",
-        "image/vnd.djvu+multipage",
-        NULL}},
-    { N_("Picture"),
-      { "application/vnd.oasis.opendocument.image",
-        "application/x-krita",
-        "image/bmp",
-        "image/cgm",
-        "image/gif",
-        "image/jpeg",
-        "image/jpeg2000",
-        "image/png",
-        "image/svg+xml",
-        "image/tiff",
-        "image/x-compressed-xcf",
-        "image/x-pcx",
-        "image/x-photo-cd",
-        "image/x-psd",
-        "image/x-tga",
-        "image/x-xcf",
-        NULL}},
-    { N_("Presentation"),
-      { "application/vnd.ms-powerpoint",
-        "application/vnd.sun.xml.impress",
-        "application/vnd.oasis.opendocument.presentation",
-        "application/x-magicpoint",
-        "application/x-kpresenter",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        NULL}},
-    { N_("Spreadsheet"),
-      { "application/vnd.lotus-1-2-3",
-        "application/vnd.ms-excel",
-        "application/vnd.stardivision.calc",
-        "application/vnd.sun.xml.calc",
-        "application/vnd.oasis.opendocument.spreadsheet",
-        "application/x-applix-spreadsheet",
-        "application/x-gnumeric",
-        "application/x-kspread",
-        "application/x-kspread-crypt",
-        "application/x-quattropro",
-        "application/x-sc",
-        "application/x-siag",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        NULL}},
-    { N_("Text File"),
-      { "text/plain",
-        NULL}},
-    { N_("Video"),
-      { "video/mp4",
-        "video/3gpp",
-        "video/mpeg",
-        "video/quicktime",
-        "video/vivo",
-        "video/x-avi",
-        "video/x-mng",
-        "video/x-ms-asf",
-        "video/x-ms-wmv",
-        "video/x-msvideo",
-        "video/x-nsv",
-        "video/x-real-video",
-        NULL}}
+    {
+        N_("Documents"),
+        {
+            "application/rtf",
+            "application/msword",
+            "application/vnd.sun.xml.writer",
+            "application/vnd.sun.xml.writer.global",
+            "application/vnd.sun.xml.writer.template",
+            "application/vnd.oasis.opendocument.text",
+            "application/vnd.oasis.opendocument.text-template",
+            "application/x-abiword",
+            "application/x-applix-word",
+            "application/x-mswrite",
+            "application/docbook+xml",
+            "application/x-kword",
+            "application/x-kword-crypt",
+            "application/x-lyx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/markdown",
+            NULL
+        }
+    },
+    {
+        N_("Illustration"),
+        {
+            "application/illustrator",
+            "application/vnd.corel-draw",
+            "application/vnd.stardivision.draw",
+            "application/vnd.oasis.opendocument.graphics",
+            "application/x-dia-diagram",
+            "application/x-karbon",
+            "application/x-killustrator",
+            "application/x-kivio",
+            "application/x-kontour",
+            "application/x-wpg",
+            NULL
+        }
+    },
+    {
+        N_("Music"),
+        {
+            "application/ogg",
+            "audio/x-vorbis+ogg",
+            "audio/ac3",
+            "audio/basic",
+            "audio/midi",
+            "audio/x-flac",
+            "audio/mp4",
+            "audio/mpeg",
+            "audio/x-mpeg",
+            "audio/x-ms-asx",
+            "audio/x-pn-realaudio",
+            NULL
+        }
+    },
+    {
+        N_("PDF / PostScript"),
+        {
+            "application/pdf",
+            "application/postscript",
+            "application/x-dvi",
+            "image/x-eps",
+            "image/vnd.djvu+multipage",
+            NULL
+        }
+    },
+    {
+        N_("Picture"),
+        {
+            "application/vnd.oasis.opendocument.image",
+            "application/x-krita",
+            "image/bmp",
+            "image/cgm",
+            "image/gif",
+            "image/jpeg",
+            "image/jpeg2000",
+            "image/png",
+            "image/svg+xml",
+            "image/tiff",
+            "image/x-compressed-xcf",
+            "image/x-pcx",
+            "image/x-photo-cd",
+            "image/x-psd",
+            "image/x-tga",
+            "image/x-xcf",
+            NULL
+        }
+    },
+    {
+        N_("Presentation"),
+        {
+            "application/vnd.ms-powerpoint",
+            "application/vnd.sun.xml.impress",
+            "application/vnd.oasis.opendocument.presentation",
+            "application/x-magicpoint",
+            "application/x-kpresenter",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            NULL
+        }
+    },
+    {
+        N_("Spreadsheet"),
+        {
+            "application/vnd.lotus-1-2-3",
+            "application/vnd.ms-excel",
+            "application/vnd.stardivision.calc",
+            "application/vnd.sun.xml.calc",
+            "application/vnd.oasis.opendocument.spreadsheet",
+            "application/x-applix-spreadsheet",
+            "application/x-gnumeric",
+            "application/x-kspread",
+            "application/x-kspread-crypt",
+            "application/x-quattropro",
+            "application/x-sc",
+            "application/x-siag",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            NULL
+        }
+    },
+    {
+        N_("Text File"),
+        {
+            "text/plain",
+            "text/markdown",
+            NULL
+        }
+    },
+    {
+        N_("Video"),
+        {
+            "video/mp4",
+            "video/3gpp",
+            "video/mpeg",
+            "video/quicktime",
+            "video/vivo",
+            "video/x-avi",
+            "video/x-mng",
+            "video/x-ms-asf",
+            "video/x-ms-wmv",
+            "video/x-msvideo",
+            "video/x-nsv",
+            "video/x-real-video",
+            NULL
+        }
+    }
 };
 
 /* Number of seconds until cancel dialog shows up */
@@ -235,6 +274,7 @@ struct
  */
 #define MAX_URI_IN_DIALOG_LENGTH 60
 
+static void activate_files_internal (ActivateParameters *parameters);
 static void cancel_activate_callback (gpointer callback_data);
 static void activate_activation_uris_ready_callback (GList   *files,
                                                      gpointer callback_data);
@@ -243,21 +283,6 @@ static void activation_start_mountables (ActivateParameters *parameters);
 static void activate_callback (GList   *files,
                                gpointer callback_data);
 static void activation_mount_not_mounted (ActivateParameters *parameters);
-
-static gboolean
-is_sandboxed (void)
-{
-    static gboolean ret;
-
-    static gsize init = 0;
-    if (g_once_init_enter (&init))
-    {
-        ret = g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS);
-        g_once_init_leave (&init, 1);
-    }
-
-    return ret;
-}
 
 static void
 launch_location_free (LaunchLocation *location)
@@ -402,7 +427,6 @@ GAppInfo *
 nautilus_mime_get_default_application_for_file (NautilusFile *file)
 {
     GAppInfo *app;
-    char *mime_type;
     char *uri_scheme;
 
     if (!nautilus_mime_actions_check_if_required_attributes_ready (file))
@@ -410,10 +434,8 @@ nautilus_mime_get_default_application_for_file (NautilusFile *file)
         return NULL;
     }
 
-    mime_type = nautilus_file_get_mime_type (file);
-    app = g_app_info_get_default_for_type (mime_type,
+    app = g_app_info_get_default_for_type (nautilus_file_get_mime_type (file),
                                            !nautilus_file_has_local_path (file));
-    g_free (mime_type);
 
     if (app == NULL)
     {
@@ -432,18 +454,8 @@ static int
 file_compare_by_mime_type (NautilusFile *file_a,
                            NautilusFile *file_b)
 {
-    char *mime_type_a, *mime_type_b;
-    int ret;
-
-    mime_type_a = nautilus_file_get_mime_type (file_a);
-    mime_type_b = nautilus_file_get_mime_type (file_b);
-
-    ret = strcmp (mime_type_a, mime_type_b);
-
-    g_free (mime_type_a);
-    g_free (mime_type_b);
-
-    return ret;
+    return strcmp (nautilus_file_get_mime_type (file_a),
+                   nautilus_file_get_mime_type (file_b));
 }
 
 static int
@@ -469,13 +481,20 @@ nautilus_mime_get_default_application_for_files (GList *files)
 {
     GList *l, *sorted_files;
     NautilusFile *file;
-    GAppInfo *app, *one_app;
+    GAppInfo *app = NULL;
 
     g_assert (files != NULL);
 
+    if (nautilus_application_is_sandboxed ())
+    {
+        /* While running as a flatpak, we don't know the default app. The code
+         * bellow might even get a wrong result because it may find matches
+         * inside the sandbox which are incorrect. */
+        return NULL;
+    }
+
     sorted_files = g_list_sort (g_list_copy (files), (GCompareFunc) file_compare_by_mime_type);
 
-    app = NULL;
     for (l = sorted_files; l != NULL; l = l->next)
     {
         file = l->data;
@@ -487,28 +506,17 @@ nautilus_mime_get_default_application_for_files (GList *files)
             continue;
         }
 
-        one_app = nautilus_mime_get_default_application_for_file (file);
+        g_autoptr (GAppInfo) one_app = nautilus_mime_get_default_application_for_file (file);
+
         if (one_app == NULL || (app != NULL && !g_app_info_equal (app, one_app)))
         {
-            if (app)
-            {
-                g_object_unref (app);
-            }
-            if (one_app)
-            {
-                g_object_unref (one_app);
-            }
-            app = NULL;
+            g_clear_object (&app);
             break;
         }
 
         if (app == NULL)
         {
-            app = one_app;
-        }
-        else
-        {
-            g_object_unref (one_app);
+            app = g_steal_pointer (&one_app);
         }
     }
 
@@ -541,33 +549,45 @@ trash_or_delete_files (GtkWindow   *parent_window,
     g_list_free_full (locations, g_object_unref);
 }
 
+typedef struct
+{
+    GtkWindow *parent_window;
+    NautilusFile *file;
+} TrashBrokenSymbolicLinkData;
+
+static void
+trash_symbolic_link_cb (GtkDialog *dialog,
+                        char      *response,
+                        gpointer   user_data)
+{
+    g_autofree TrashBrokenSymbolicLinkData *data = NULL;
+    GList file_as_list;
+
+    data = user_data;
+
+    if (g_strcmp0 (response, "move-to-trash") == 0)
+    {
+        file_as_list.data = data->file;
+        file_as_list.next = NULL;
+        file_as_list.prev = NULL;
+        trash_or_delete_files (data->parent_window, &file_as_list, TRUE);
+    }
+}
+
 static void
 report_broken_symbolic_link (GtkWindow    *parent_window,
                              NautilusFile *file)
 {
-    char *target_path;
-    char *display_name;
-    char *prompt;
+    const char *target_path;
     char *detail;
-    GtkDialog *dialog;
-    GList file_as_list;
-    int response;
+    GtkWidget *dialog;
+    TrashBrokenSymbolicLinkData *data;
+
     gboolean can_trash;
 
     g_assert (nautilus_file_is_broken_symbolic_link (file));
 
-    display_name = nautilus_file_get_display_name (file);
     can_trash = nautilus_file_can_trash (file) && !nautilus_file_is_in_trash (file);
-
-    if (can_trash)
-    {
-        prompt = g_strdup_printf (_("The link “%s” is broken. Move it to Trash?"), display_name);
-    }
-    else
-    {
-        prompt = g_strdup_printf (_("The link “%s” is broken."), display_name);
-    }
-    g_free (display_name);
 
     target_path = nautilus_file_get_symbolic_link_target_path (file);
     if (target_path == NULL)
@@ -580,17 +600,28 @@ report_broken_symbolic_link (GtkWindow    *parent_window,
                                     "“%s” doesn’t exist."), target_path);
     }
 
-    if (!can_trash)
+    if (can_trash)
     {
-        eel_run_simple_dialog (GTK_WIDGET (parent_window), FALSE, GTK_MESSAGE_WARNING,
-                               prompt, detail, _("_Cancel"), NULL);
-        goto out;
+        dialog = adw_message_dialog_new (parent_window, NULL, detail);
+        adw_message_dialog_format_heading (ADW_MESSAGE_DIALOG (dialog),
+                                           _("The link “%s” is broken. Move it to Trash?"),
+                                           nautilus_file_get_display_name (file));
+        adw_message_dialog_add_responses (ADW_MESSAGE_DIALOG (dialog),
+                                          "cancel", _("_Cancel"),
+                                          "move-to-trash", _("Mo_ve to Trash"),
+                                          NULL);
+    }
+    else
+    {
+        dialog = adw_message_dialog_new (parent_window, NULL, detail);
+        adw_message_dialog_format_heading (ADW_MESSAGE_DIALOG (dialog),
+                                           _("The link “%s” is broken."),
+                                           nautilus_file_get_display_name (file));
+        adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog),
+                                         "cancel", _("Cancel"));
     }
 
-    dialog = eel_show_yes_no_dialog (prompt, detail, _("Mo_ve to Trash"), _("_Cancel"),
-                                     parent_window);
-
-    gtk_dialog_set_default_response (dialog, GTK_RESPONSE_CANCEL);
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "cancel");
 
     /* Make this modal to avoid problems with reffing the view & file
      * to keep them around in case the view changes, which would then
@@ -601,20 +632,15 @@ report_broken_symbolic_link (GtkWindow    *parent_window,
      * to change wildly, I don't want to mess with this now.
      */
 
-    response = gtk_dialog_run (dialog);
-    gtk_widget_destroy (GTK_WIDGET (dialog));
+    data = g_new0 (TrashBrokenSymbolicLinkData, 1);
+    data->parent_window = parent_window;
+    data->file = file;
 
-    if (response == GTK_RESPONSE_YES)
-    {
-        file_as_list.data = file;
-        file_as_list.next = NULL;
-        file_as_list.prev = NULL;
-        trash_or_delete_files (parent_window, &file_as_list, TRUE);
-    }
+    g_signal_connect (G_OBJECT (dialog),
+                      "response",
+                      G_CALLBACK (trash_symbolic_link_cb),
+                      data);
 
-out:
-    g_free (prompt);
-    g_free (target_path);
     g_free (detail);
 }
 
@@ -867,15 +893,12 @@ activation_parameters_free (ActivateParameters *parameters)
     g_free (parameters->activation_directory);
     g_free (parameters->timed_wait_prompt);
     g_assert (parameters->files_handle == NULL);
-    g_free (parameters);
-}
-
-static void
-application_launch_async_parameters_free (ApplicationLaunchAsyncParameters *parameters)
-{
-    g_queue_free (parameters->uris);
-    activation_parameters_free (parameters->activation_params);
-
+    g_clear_pointer (&parameters->open_in_view_files, g_queue_free);
+    g_clear_pointer (&parameters->open_in_app_uris, g_queue_free);
+    g_clear_pointer (&parameters->launch_files, g_queue_free);
+    g_clear_pointer (&parameters->launch_in_terminal_files, g_queue_free);
+    g_list_free (parameters->open_in_app_parameters);
+    g_list_free (parameters->unhandled_open_in_app_uris);
     g_free (parameters);
 }
 
@@ -947,41 +970,63 @@ activate_mount_op_active (GtkMountOperation  *operation,
     }
 }
 
-static gboolean
-confirm_multiple_windows (GtkWindow *parent_window,
-                          int        count,
-                          gboolean   use_tabs)
+static void
+on_confirm_multiple_windows_response (GtkDialog          *dialog,
+                                      gchar              *response,
+                                      ActivateParameters *parameters)
 {
-    GtkDialog *dialog;
+    if (g_strcmp0 (response, "open-all") == 0)
+    {
+        unpause_activation_timed_cancel (parameters);
+        activate_files_internal (parameters);
+    }
+    else
+    {
+        activation_parameters_free (parameters);
+    }
+}
+
+static void
+show_confirm_multiple (ActivateParameters *parameters,
+                       int                 window_count,
+                       int                 tab_count)
+{
+    GtkWindow *parent_window = parameters->parent_window;
+    GtkWidget *dialog;
     char *prompt;
     char *detail;
-    int response;
-
-    if (count <= SILENT_WINDOW_OPEN_LIMIT)
-    {
-        return TRUE;
-    }
 
     prompt = _("Are you sure you want to open all files?");
-    if (use_tabs)
+    if (tab_count > 0 && window_count > 0)
+    {
+        int count = tab_count + window_count;
+        detail = g_strdup_printf (ngettext ("This will open %d separate tab and window.",
+                                            "This will open %d separate tabs and windows.", count), count);
+    }
+    else if (tab_count > 0)
     {
         detail = g_strdup_printf (ngettext ("This will open %d separate tab.",
-                                            "This will open %d separate tabs.", count), count);
+                                            "This will open %d separate tabs.", tab_count), tab_count);
     }
     else
     {
         detail = g_strdup_printf (ngettext ("This will open %d separate window.",
-                                            "This will open %d separate windows.", count), count);
+                                            "This will open %d separate windows.", window_count), window_count);
     }
-    dialog = eel_show_yes_no_dialog (prompt, detail,
-                                     _("_OK"), _("_Cancel"),
-                                     parent_window);
+
+    dialog = adw_message_dialog_new (parent_window, prompt, detail);
+    adw_message_dialog_add_responses (ADW_MESSAGE_DIALOG (dialog),
+                                      "cancel", _("_Cancel"),
+                                      "open-all", _("_Open All"),
+                                      NULL);
+
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "open-all");
+
+    g_signal_connect (dialog, "response",
+                      G_CALLBACK (on_confirm_multiple_windows_response), parameters);
+    gtk_window_present (GTK_WINDOW (dialog));
+
     g_free (detail);
-
-    response = gtk_dialog_run (dialog);
-    gtk_widget_destroy (GTK_WIDGET (dialog));
-
-    return response == GTK_RESPONSE_YES;
 }
 
 typedef struct
@@ -990,10 +1035,9 @@ typedef struct
     GtkWindow *parent_window;
     NautilusFile *file;
     GList *files;
-    NautilusWindowOpenFlags flags;
+    NautilusOpenFlags flags;
     char *activation_directory;
     gboolean user_confirmation;
-    char *uri;
     GDBusProxy *proxy;
     GtkWidget *dialog;
 } ActivateParametersInstall;
@@ -1018,28 +1062,23 @@ activate_parameters_install_free (ActivateParametersInstall *parameters_install)
     nautilus_file_unref (parameters_install->file);
     nautilus_file_list_free (parameters_install->files);
     g_free (parameters_install->activation_directory);
-    g_free (parameters_install->uri);
     g_free (parameters_install);
 }
 
 static char *
-get_application_no_mime_type_handler_message (NautilusFile *file,
-                                              char         *uri)
+get_application_no_mime_type_handler_message (NautilusFile *file)
 {
     char *uri_for_display;
-    char *name;
     char *error_message;
-
-    name = nautilus_file_get_display_name (file);
 
     /* Truncate the URI so it doesn't get insanely wide. Note that even
      * though the dialog uses wrapped text, if the URI doesn't contain
      * white space then the text-wrapping code is too stupid to wrap it.
      */
-    uri_for_display = eel_str_middle_truncate (name, MAX_URI_IN_DIALOG_LENGTH);
+    uri_for_display = g_utf8_truncate_middle (nautilus_file_get_display_name (file),
+                                              MAX_URI_IN_DIALOG_LENGTH);
     error_message = g_strdup_printf (_("Could Not Display “%s”"), uri_for_display);
     g_free (uri_for_display);
-    g_free (name);
 
     return error_message;
 }
@@ -1057,7 +1096,7 @@ open_with_response_cb (GtkDialog *dialog,
 
     if (response_id != GTK_RESPONSE_OK)
     {
-        gtk_widget_destroy (GTK_WIDGET (dialog));
+        gtk_window_destroy (GTK_WINDOW (dialog));
         return;
     }
 
@@ -1065,7 +1104,7 @@ open_with_response_cb (GtkDialog *dialog,
     file = g_object_get_data (G_OBJECT (dialog), "mime-action:file");
     info = gtk_app_chooser_get_app_info (GTK_APP_CHOOSER (dialog));
 
-    gtk_widget_destroy (GTK_WIDGET (dialog));
+    gtk_window_destroy (GTK_WINDOW (dialog));
 
     g_signal_emit_by_name (nautilus_signaller_get_current (), "mime-data-changed");
 
@@ -1081,7 +1120,7 @@ open_with_response_cb (GtkDialog *dialog,
 
 static void
 choose_program (GtkDialog *message_dialog,
-                int        response,
+                gchar     *response,
                 gpointer   callback_data)
 {
     GtkWidget *dialog;
@@ -1089,9 +1128,8 @@ choose_program (GtkDialog *message_dialog,
     GFile *location;
     ActivateParametersInstall *parameters = callback_data;
 
-    if (response != GTK_RESPONSE_ACCEPT)
+    if (g_strcmp0 (response, "select-application") != 0)
     {
-        gtk_widget_destroy (GTK_WIDGET (message_dialog));
         activate_parameters_install_free (parameters);
         return;
     }
@@ -1104,7 +1142,7 @@ choose_program (GtkDialog *message_dialog,
     nautilus_file_ref (file);
 
     /* Destroy the message dialog after ref:ing the file */
-    gtk_widget_destroy (GTK_WIDGET (message_dialog));
+    gtk_window_destroy (GTK_WINDOW (message_dialog));
 
     dialog = gtk_app_chooser_dialog_new (parameters->parent_window,
                                          GTK_DIALOG_MODAL,
@@ -1114,7 +1152,7 @@ choose_program (GtkDialog *message_dialog,
                             nautilus_file_ref (file),
                             (GDestroyNotify) nautilus_file_unref);
 
-    gtk_widget_show (dialog);
+    gtk_window_present (GTK_WINDOW (dialog));
 
     g_signal_connect (dialog,
                       "response",
@@ -1129,53 +1167,40 @@ static void
 show_unhandled_type_error (ActivateParametersInstall *parameters)
 {
     GtkWidget *dialog;
+    g_autofree char *body = NULL;
+    g_autofree char *content_type_description = NULL;
 
-    char *mime_type = nautilus_file_get_mime_type (parameters->file);
-    char *error_message = get_application_no_mime_type_handler_message (parameters->file, parameters->uri);
+    const char *mime_type = nautilus_file_get_mime_type (parameters->file);
+    char *error_message = get_application_no_mime_type_handler_message (parameters->file);
+
     if (g_content_type_is_unknown (mime_type))
     {
-        dialog = gtk_message_dialog_new (parameters->parent_window,
-                                         GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL,
-                                         GTK_MESSAGE_ERROR,
-                                         0,
-                                         "%s", error_message);
-        gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                                  _("The file is of an unknown type"));
+        body = g_strdup (_("The file is of an unknown type"));
     }
     else
     {
-        char *text;
-        text = g_strdup_printf (_("There is no application installed for “%s” files"), g_content_type_get_description (mime_type));
-
-        dialog = gtk_message_dialog_new (parameters->parent_window,
-                                         GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL,
-                                         GTK_MESSAGE_ERROR,
-                                         0,
-                                         "%s", error_message);
-        gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                                  "%s", text);
-
-        g_free (text);
+        content_type_description = g_content_type_get_description (mime_type);
+        body = g_strdup_printf (_("There is no app installed for “%s” files"), content_type_description);
     }
 
-    gtk_dialog_add_button (GTK_DIALOG (dialog), _("_Select Application"), GTK_RESPONSE_ACCEPT);
-
-    gtk_dialog_add_button (GTK_DIALOG (dialog), _("_OK"), GTK_RESPONSE_OK);
-
-    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+    dialog = adw_message_dialog_new (parameters->parent_window, error_message, body);
+    adw_message_dialog_add_responses (ADW_MESSAGE_DIALOG (dialog),
+                                      "select-application", _("_Select App"),
+                                      "ok", _("_OK"),
+                                      NULL);
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "ok");
 
     g_object_set_data_full (G_OBJECT (dialog),
                             "mime-action:file",
                             nautilus_file_ref (parameters->file),
                             (GDestroyNotify) nautilus_file_unref);
 
-    gtk_widget_show (GTK_WIDGET (dialog));
+    gtk_window_present (GTK_WINDOW (dialog));
 
     g_signal_connect (dialog, "response",
                       G_CALLBACK (choose_program), parameters);
 
     g_free (error_message);
-    g_free (mime_type);
 }
 
 static void
@@ -1196,9 +1221,9 @@ search_for_application_dbus_call_notify_cb (GDBusProxy   *proxy,
             char *message;
 
             message = g_strdup_printf ("%s\n%s",
-                                       _("There was an internal error trying to search for applications:"),
+                                       _("There was an internal error trying to search for apps:"),
                                        error->message);
-            show_dialog (_("Unable to search for application"),
+            show_dialog (_("Unable to search for app"),
                          message,
                          parameters_install->parent_window,
                          GTK_MESSAGE_ERROR);
@@ -1206,7 +1231,7 @@ search_for_application_dbus_call_notify_cb (GDBusProxy   *proxy,
         }
         else
         {
-            g_warning ("Error while trying to search for applications: %s",
+            g_warning ("Error while trying to search for apps: %s",
                        error->message);
         }
 
@@ -1228,7 +1253,7 @@ search_for_application_mime_type (ActivateParametersInstall *parameters_install,
 
     g_assert (parameters_install->proxy != NULL);
 
-    desktop_startup_id = g_strdup_printf ("_TIME%i", gtk_get_current_event_time ());
+    desktop_startup_id = g_strdup_printf ("_TIME%i", (guint32) GDK_CURRENT_TIME);
 
     g_dbus_proxy_call (parameters_install->proxy,
                        "InstallMimeTypes",
@@ -1244,24 +1269,21 @@ search_for_application_mime_type (ActivateParametersInstall *parameters_install,
                        (GAsyncReadyCallback) search_for_application_dbus_call_notify_cb,
                        parameters_install);
 
-    DEBUG ("InstallMimeType method invoked for %s", mime_type);
+    g_debug ("InstallMimeType method invoked for %s", mime_type);
 }
 
 static void
 application_unhandled_file_install (GtkDialog                 *dialog,
-                                    gint                       response_id,
+                                    gchar                     *response,
                                     ActivateParametersInstall *parameters_install)
 {
-    char *mime_type;
-
-    gtk_widget_destroy (GTK_WIDGET (dialog));
     parameters_install->dialog = NULL;
 
-    if (response_id == GTK_RESPONSE_YES)
+    if (g_strcmp0 (response, "search-in-software") == 0)
     {
-        mime_type = nautilus_file_get_mime_type (parameters_install->file);
+        const char *mime_type = nautilus_file_get_mime_type (parameters_install->file);
+
         search_for_application_mime_type (parameters_install, mime_type);
-        g_free (mime_type);
     }
     else
     {
@@ -1276,11 +1298,13 @@ pk_proxy_appeared_cb (GObject      *source,
                       gpointer      user_data)
 {
     ActivateParametersInstall *parameters_install = user_data;
-    char *mime_type, *name_owner;
+    const char *mime_type;
+    g_autofree char *name_owner = NULL;
     char *error_message;
     GtkWidget *dialog;
     GDBusProxy *proxy;
     GError *error = NULL;
+    g_autofree char *content_type_description = NULL;
 
     proxy = g_dbus_proxy_new_for_bus_finish (res, &error);
     name_owner = g_dbus_proxy_get_name_owner (proxy);
@@ -1297,27 +1321,21 @@ pk_proxy_appeared_cb (GObject      *source,
         return;
     }
 
-    g_free (name_owner);
-
     mime_type = nautilus_file_get_mime_type (parameters_install->file);
-    error_message = get_application_no_mime_type_handler_message (parameters_install->file,
-                                                                  parameters_install->uri);
+    content_type_description = g_content_type_get_description (mime_type);
+    error_message = get_application_no_mime_type_handler_message (parameters_install->file);
     /* use a custom dialog to prompt the user to install new software */
-    dialog = gtk_message_dialog_new (parameters_install->parent_window,
-                                     GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL,
-                                     GTK_MESSAGE_ERROR,
-                                     GTK_BUTTONS_NONE,
-                                     "%s", error_message);
-    gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-                                              _("There is no application installed for “%s” files. "
-                                                "Do you want to search for an application to open this file?"),
-                                              g_content_type_get_description (mime_type));
-    gtk_window_set_resizable (GTK_WINDOW (dialog), FALSE);
+    dialog = adw_message_dialog_new (parameters_install->parent_window, error_message, NULL);
+    adw_message_dialog_add_responses (ADW_MESSAGE_DIALOG (dialog),
+                                      "cancel", _("_Cancel"),
+                                      "search-in-software", _("_Search in Software"),
+                                      NULL);
+    adw_message_dialog_format_body (ADW_MESSAGE_DIALOG (dialog),
+                                    _("There is no app installed for “%s” files. "
+                                      "Do you want to search for an app to open this file?"),
+                                    content_type_description);
 
-    gtk_dialog_add_button (GTK_DIALOG (dialog), _("_Cancel"), GTK_RESPONSE_CANCEL);
-    gtk_dialog_add_button (GTK_DIALOG (dialog), _("_Search in Software"), GTK_RESPONSE_YES);
-
-    gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_YES);
+    adw_message_dialog_set_default_response (ADW_MESSAGE_DIALOG (dialog), "search-in-software");
 
     parameters_install->dialog = dialog;
     parameters_install->proxy = proxy;
@@ -1325,8 +1343,7 @@ pk_proxy_appeared_cb (GObject      *source,
     g_signal_connect (dialog, "response",
                       G_CALLBACK (application_unhandled_file_install),
                       parameters_install);
-    gtk_widget_show_all (dialog);
-    g_free (mime_type);
+    gtk_window_present (GTK_WINDOW (dialog));
 }
 
 static void
@@ -1334,13 +1351,10 @@ application_unhandled_uri (ActivateParameters *parameters,
                            char               *uri)
 {
     gboolean show_install_mime;
-    char *mime_type;
     NautilusFile *file;
     ActivateParametersInstall *parameters_install;
 
     file = nautilus_file_get_by_uri (uri);
-
-    mime_type = nautilus_file_get_mime_type (file);
 
     /* copy the parts of parameters we are interested in as the orignal will be unref'd */
     parameters_install = g_new0 (ActivateParametersInstall, 1);
@@ -1356,7 +1370,6 @@ application_unhandled_uri (ActivateParameters *parameters,
     parameters_install->files = get_file_list_for_launch_locations (parameters->locations);
     parameters_install->flags = parameters->flags;
     parameters_install->user_confirmation = parameters->user_confirmation;
-    parameters_install->uri = g_strdup (uri);
 
 #ifdef ENABLE_PACKAGEKIT
     /* allow an admin to disable the PackageKit search functionality */
@@ -1366,12 +1379,10 @@ application_unhandled_uri (ActivateParameters *parameters,
     show_install_mime = FALSE;
 #endif
     /* There is no use trying to look for handlers of application/octet-stream */
-    if (g_content_type_is_unknown (mime_type))
+    if (g_content_type_is_unknown (nautilus_file_get_mime_type (file)))
     {
         show_install_mime = FALSE;
     }
-
-    g_free (mime_type);
 
     if (!show_install_mime)
     {
@@ -1396,36 +1407,38 @@ out:
 }
 
 static void
-launch_default_for_uris_callback (GObject      *source_object,
-                                  GAsyncResult *res,
-                                  gpointer      user_data)
+sandboxed_launcher_callback (GObject      *source_object,
+                             GAsyncResult *res,
+                             gpointer      user_data)
 {
-    ApplicationLaunchAsyncParameters *params;
-    ActivateParameters *activation_params;
-    char *uri;
+    GtkFileLauncher *launcher = GTK_FILE_LAUNCHER (source_object);
+    ActivateParameters *activation_params = (ActivateParameters *) user_data;
     g_autoptr (GError) error = NULL;
 
-    params = user_data;
-    activation_params = params->activation_params;
-    uri = g_queue_pop_head (params->uris);
-
-    nautilus_launch_default_for_uri_finish (res, &error);
+    gtk_file_launcher_launch_finish (launcher, res, &error);
     if (error == NULL)
     {
+        /* Extract URI from the launched file and add it to recents. */
+        g_autofree gchar *uri = g_file_get_uri (gtk_file_launcher_get_file (launcher));
         gtk_recent_manager_add_item (gtk_recent_manager_get_default (), uri);
     }
 
-    if (!g_queue_is_empty (params->uris))
+    if (!g_queue_is_empty (activation_params->open_in_app_uris))
     {
-        nautilus_launch_default_for_uri_async (g_queue_peek_head (params->uris),
-                                               activation_params->parent_window,
-                                               activation_params->cancellable,
-                                               launch_default_for_uris_callback,
-                                               params);
+        /* Take next file off the queue to launch it. */
+        const gchar *uri = g_queue_pop_head (activation_params->open_in_app_uris);
+        g_autoptr (GFile) location = g_file_new_for_uri (uri);
+
+        gtk_file_launcher_set_file (launcher, location);
+        gtk_file_launcher_launch (launcher,
+                                  activation_params->parent_window,
+                                  activation_params->cancellable,
+                                  sandboxed_launcher_callback,
+                                  activation_params /* callback takes ownership */);
     }
     else
     {
-        application_launch_async_parameters_free (params);
+        activation_parameters_free (activation_params);
     }
 }
 
@@ -1433,28 +1446,16 @@ static void
 activate_files (ActivateParameters *parameters)
 {
     NautilusFile *file;
-    NautilusWindowOpenFlags flags;
-    g_autoptr (GList) open_in_app_parameters = NULL;
-    g_autoptr (GList) unhandled_open_in_app_uris = NULL;
-    ApplicationLaunchParameters *one_parameters;
     int count;
-    g_autofree char *old_working_dir = NULL;
-    GdkScreen *screen;
-    gint num_apps;
-    gint num_unhandled;
-    gint num_files;
-    gboolean open_files;
-    g_autoptr (GQueue) launch_files = NULL;
-    g_autoptr (GQueue) launch_in_terminal_files = NULL;
-    g_autoptr (GQueue) open_in_app_uris = NULL;
-    g_autoptr (GQueue) open_in_view_files = NULL;
+    gint num_windows = 0;
+    gint num_tabs = 0;
     GList *l;
     ActivationAction action;
 
-    launch_files = g_queue_new ();
-    launch_in_terminal_files = g_queue_new ();
-    open_in_view_files = g_queue_new ();
-    open_in_app_uris = g_queue_new ();
+    parameters->launch_files = g_queue_new ();
+    parameters->launch_in_terminal_files = g_queue_new ();
+    parameters->open_in_view_files = g_queue_new ();
+    parameters->open_in_app_uris = g_queue_new ();
 
     for (l = parameters->locations; l != NULL; l = l->next)
     {
@@ -1474,25 +1475,25 @@ activate_files (ActivateParameters *parameters)
         {
             case ACTIVATION_ACTION_LAUNCH:
             {
-                g_queue_push_tail (launch_files, file);
+                g_queue_push_tail (parameters->launch_files, file);
             }
             break;
 
             case ACTIVATION_ACTION_LAUNCH_IN_TERMINAL:
             {
-                g_queue_push_tail (launch_in_terminal_files, file);
+                g_queue_push_tail (parameters->launch_in_terminal_files, file);
             }
             break;
 
             case ACTIVATION_ACTION_OPEN_IN_VIEW:
             {
-                g_queue_push_tail (open_in_view_files, file);
+                g_queue_push_tail (parameters->open_in_view_files, file);
             }
             break;
 
             case ACTIVATION_ACTION_OPEN_IN_APPLICATION:
             {
-                g_queue_push_tail (open_in_app_uris, location->uri);
+                g_queue_push_tail (parameters->open_in_app_uris, location->uri);
             }
             break;
 
@@ -1510,16 +1511,70 @@ activate_files (ActivateParameters *parameters)
         }
     }
 
+    count = g_queue_get_length (parameters->open_in_view_files);
+    if (count > 1)
+    {
+        if ((parameters->flags & NAUTILUS_OPEN_FLAG_NEW_WINDOW) == 0)
+        {
+            parameters->flags |= NAUTILUS_OPEN_FLAG_NEW_TAB;
+            num_tabs += count;
+        }
+        else
+        {
+            parameters->flags |= NAUTILUS_OPEN_FLAG_NEW_WINDOW;
+            num_windows += count;
+        }
+    }
+
+    if (parameters->open_in_app_uris != NULL)
+    {
+        if (nautilus_application_is_sandboxed ())
+        {
+            num_windows += g_queue_get_length (parameters->open_in_app_uris);
+        }
+        else
+        {
+            parameters->open_in_app_parameters = make_activation_parameters (g_queue_peek_head_link (parameters->open_in_app_uris),
+                                                                             &parameters->unhandled_open_in_app_uris);
+            num_windows += g_list_length (parameters->open_in_app_parameters);
+            num_windows += g_list_length (parameters->unhandled_open_in_app_uris);
+        }
+    }
+
+    num_windows += g_queue_get_length (parameters->launch_files);
+    num_windows += g_queue_get_length (parameters->launch_in_terminal_files);
+
+    if (parameters->user_confirmation &&
+        num_tabs + num_windows > SILENT_OPEN_LIMIT)
+    {
+        pause_activation_timed_cancel (parameters);
+        show_confirm_multiple (parameters, num_windows, num_tabs);
+    }
+    else
+    {
+        activate_files_internal (parameters);
+    }
+}
+
+static void
+activate_files_internal (ActivateParameters *parameters)
+{
+    NautilusFile *file;
+    ApplicationLaunchParameters *one_parameters;
+    g_autofree char *old_working_dir = NULL;
+    GdkDisplay *display;
+    GList *l;
+
     if (parameters->activation_directory &&
-        (!g_queue_is_empty (launch_files) ||
-         !g_queue_is_empty (launch_in_terminal_files)))
+        (!g_queue_is_empty (parameters->launch_files) ||
+         !g_queue_is_empty (parameters->launch_in_terminal_files)))
     {
         old_working_dir = g_get_current_dir ();
         g_chdir (parameters->activation_directory);
     }
 
-    screen = gtk_widget_get_screen (GTK_WIDGET (parameters->parent_window));
-    for (l = g_queue_peek_head_link (launch_files); l != NULL; l = l->next)
+    display = gtk_widget_get_display (GTK_WIDGET (parameters->parent_window));
+    for (l = g_queue_peek_head_link (parameters->launch_files); l != NULL; l = l->next)
     {
         g_autofree char *uri = NULL;
         g_autofree char *executable_path = NULL;
@@ -1531,12 +1586,12 @@ activate_files (ActivateParameters *parameters)
         executable_path = g_filename_from_uri (uri, NULL, NULL);
         quoted_path = g_shell_quote (executable_path);
 
-        DEBUG ("Launching file path %s", quoted_path);
+        g_debug ("Launching file path %s", quoted_path);
 
-        nautilus_launch_application_from_command (screen, quoted_path, FALSE, NULL);
+        nautilus_launch_application_from_command (display, quoted_path, FALSE, NULL);
     }
 
-    for (l = g_queue_peek_head_link (launch_in_terminal_files); l != NULL; l = l->next)
+    for (l = g_queue_peek_head_link (parameters->launch_in_terminal_files); l != NULL; l = l->next)
     {
         g_autofree char *uri = NULL;
         g_autofree char *executable_path = NULL;
@@ -1548,9 +1603,9 @@ activate_files (ActivateParameters *parameters)
         executable_path = g_filename_from_uri (uri, NULL, NULL);
         quoted_path = g_shell_quote (executable_path);
 
-        DEBUG ("Launching in terminal file quoted path %s", quoted_path);
+        g_debug ("Launching in terminal file quoted path %s", quoted_path);
 
-        nautilus_launch_application_from_command (screen, quoted_path, TRUE, NULL);
+        nautilus_launch_application_from_command (display, quoted_path, TRUE, NULL);
     }
 
     if (old_working_dir != NULL)
@@ -1558,39 +1613,19 @@ activate_files (ActivateParameters *parameters)
         g_chdir (old_working_dir);
     }
 
-    count = g_queue_get_length (open_in_view_files);
-
-    flags = parameters->flags;
-    if (count > 1)
+    if (parameters->slot != NULL)
     {
-        if ((parameters->flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW) == 0)
-        {
-            flags |= NAUTILUS_WINDOW_OPEN_FLAG_NEW_TAB;
-        }
-        else
-        {
-            flags |= NAUTILUS_WINDOW_OPEN_FLAG_NEW_WINDOW;
-        }
-    }
-
-    if (parameters->slot != NULL &&
-        (!parameters->user_confirmation ||
-         confirm_multiple_windows (parameters->parent_window, count,
-                                   (flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_TAB) != 0)))
-    {
-        if ((flags & NAUTILUS_WINDOW_OPEN_FLAG_NEW_TAB) != 0 &&
-            g_settings_get_enum (nautilus_preferences, NAUTILUS_PREFERENCES_NEW_TAB_POSITION) ==
-            NAUTILUS_NEW_TAB_POSITION_AFTER_CURRENT_TAB)
+        if ((parameters->flags & NAUTILUS_OPEN_FLAG_NEW_TAB) != 0)
         {
             /* When inserting N tabs after the current one,
              * we first open tab N, then tab N-1, ..., then tab 0.
              * Each of them is appended to the current tab, i.e.
              * prepended to the list of tabs to open.
              */
-            g_queue_reverse (open_in_view_files);
+            g_queue_reverse (parameters->open_in_view_files);
         }
 
-        for (l = g_queue_peek_head_link (open_in_view_files); l != NULL; l = l->next)
+        for (l = g_queue_peek_head_link (parameters->open_in_view_files); l != NULL; l = l->next)
         {
             g_autofree char *uri = NULL;
             g_autoptr (GFile) location = NULL;
@@ -1605,87 +1640,52 @@ activate_files (ActivateParameters *parameters)
                  !nautilus_file_can_read (file) ||
                  !nautilus_file_can_execute (file)))
             {
-                g_autofree gchar *file_path = NULL;
-
                 g_free (uri);
-
-                file_path = g_file_get_path (location);
-                uri = g_strconcat ("admin://", file_path, NULL);
+                uri = g_strconcat (SCHEME_ADMIN "://", g_file_peek_path (location), NULL);
             }
 
             location_with_permissions = g_file_new_for_uri (uri);
-            /* FIXME: we need to pass the parent_window, but we only use it for the current active window,
-             * which nautilus-application should take care of. However is not working and creating regressions
-             * in some cases. Until we figure out what's going on, continue to use the parameters->slot
-             * to make splicit the window we want to use for activating the files */
-            nautilus_application_open_location_full (NAUTILUS_APPLICATION (g_application_get_default ()),
-                                                     location_with_permissions, flags, NULL, NULL, parameters->slot);
+
+            if (parameters->flags & (NAUTILUS_OPEN_FLAG_NEW_WINDOW | NAUTILUS_OPEN_FLAG_NEW_TAB))
+            {
+                nautilus_application_open_location_full (NAUTILUS_APPLICATION (g_application_get_default ()),
+                                                         location_with_permissions, parameters->flags, NULL, NULL, parameters->slot);
+            }
+            else
+            {
+                nautilus_window_slot_open_location_full (parameters->slot,
+                                                         location_with_permissions,
+                                                         parameters->flags,
+                                                         NULL);
+            }
         }
     }
 
-    if (!g_queue_is_empty (open_in_app_uris) && is_sandboxed ())
+    if (!g_queue_is_empty (parameters->open_in_app_uris) && nautilus_application_is_sandboxed ())
     {
-        const char *uri;
-        ApplicationLaunchAsyncParameters *async_params;
+        /* Use GtkFileLauncher as a convenient wrapper for the portal.
+         *
+         * Here we won't launch all files in the queue at once in a 'for' loop,
+         * because we could get multiple portal dialogs at the same time.
+         *
+         * So, instead, we launch one at a time, waiting for the async callback
+         * to launch the next one.
+         */
+        const gchar *uri = g_queue_pop_head (parameters->open_in_app_uris);
+        g_autoptr (GFile) location = g_file_new_for_uri (uri);
+        g_autoptr (GtkFileLauncher) launcher = gtk_file_launcher_new (location);
 
-        uri = g_queue_peek_head (open_in_app_uris);
-
-        async_params = g_new0 (ApplicationLaunchAsyncParameters, 1);
-        async_params->activation_params = parameters;
-        async_params->uris = g_steal_pointer (&open_in_app_uris);
-
-        nautilus_launch_default_for_uri_async (uri,
-                                               parameters->parent_window,
-                                               parameters->cancellable,
-                                               launch_default_for_uris_callback,
-                                               async_params);
+        gtk_file_launcher_launch (launcher,
+                                  parameters->parent_window,
+                                  parameters->cancellable,
+                                  sandboxed_launcher_callback,
+                                  parameters /* callback takes ownership */);
         return;
     }
 
-    if (open_in_app_uris != NULL)
+    if (!g_queue_is_empty (parameters->open_in_app_uris))
     {
-        open_in_app_parameters = make_activation_parameters (g_queue_peek_head_link (open_in_app_uris),
-                                                             &unhandled_open_in_app_uris);
-    }
-
-    num_apps = g_list_length (open_in_app_parameters);
-    num_unhandled = g_list_length (unhandled_open_in_app_uris);
-    num_files = g_queue_get_length (open_in_app_uris);
-    open_files = TRUE;
-
-    if (!g_queue_is_empty (open_in_app_uris) &&
-        (!parameters->user_confirmation ||
-         num_files + num_unhandled > SILENT_OPEN_LIMIT) &&
-        num_apps > 1)
-    {
-        GtkDialog *dialog;
-        char *prompt;
-        g_autofree char *detail = NULL;
-        int response;
-
-        pause_activation_timed_cancel (parameters);
-
-        prompt = _("Are you sure you want to open all files?");
-        /* TODO: Replace 'window' with 'application' after string freeze. */
-        detail = g_strdup_printf (ngettext ("This will open %d separate window.",
-                                            "This will open %d separate windows.", num_apps), num_apps);
-        dialog = eel_show_yes_no_dialog (prompt, detail,
-                                         _("_OK"), _("_Cancel"),
-                                         parameters->parent_window);
-        response = gtk_dialog_run (dialog);
-        gtk_widget_destroy (GTK_WIDGET (dialog));
-
-        unpause_activation_timed_cancel (parameters);
-
-        if (response != GTK_RESPONSE_YES)
-        {
-            open_files = FALSE;
-        }
-    }
-
-    if (open_files)
-    {
-        for (l = open_in_app_parameters; l != NULL; l = l->next)
+        for (l = parameters->open_in_app_parameters; l != NULL; l = l->next)
         {
             one_parameters = l->data;
 
@@ -1695,7 +1695,7 @@ activate_files (ActivateParameters *parameters)
             application_launch_parameters_free (one_parameters);
         }
 
-        for (l = unhandled_open_in_app_uris; l != NULL; l = l->next)
+        for (l = parameters->unhandled_open_in_app_uris; l != NULL; l = l->next)
         {
             char *uri = l->data;
 
@@ -2171,15 +2171,14 @@ activation_start_mountables (ActivateParameters *parameters)
  *
  **/
 void
-nautilus_mime_activate_files (GtkWindow               *parent_window,
-                              NautilusWindowSlot      *slot,
-                              GList                   *files,
-                              const char              *launch_directory,
-                              NautilusWindowOpenFlags  flags,
-                              gboolean                 user_confirmation)
+nautilus_mime_activate_files (GtkWindow          *parent_window,
+                              NautilusWindowSlot *slot,
+                              GList              *files,
+                              const char         *launch_directory,
+                              NautilusOpenFlags   flags,
+                              gboolean            user_confirmation)
 {
     ActivateParameters *parameters;
-    char *file_name;
     int file_count;
     GList *l, *next;
     NautilusFile *file;
@@ -2190,7 +2189,8 @@ nautilus_mime_activate_files (GtkWindow               *parent_window,
         return;
     }
 
-    DEBUG_FILES (files, "Calling activate_files() with files:");
+    g_debug ("Calling activate_files() with files:");
+    nautilus_file_list_debug (files);
 
     parameters = g_new0 (ActivateParameters, 1);
     parameters->slot = slot;
@@ -2209,9 +2209,8 @@ nautilus_mime_activate_files (GtkWindow               *parent_window,
     file_count = g_list_length (files);
     if (file_count == 1)
     {
-        file_name = nautilus_file_get_display_name (files->data);
+        const char *file_name = nautilus_file_get_display_name (files->data);
         parameters->timed_wait_prompt = g_strdup_printf (_("Opening “%s”."), file_name);
-        g_free (file_name);
     }
     else
     {
@@ -2268,11 +2267,11 @@ nautilus_mime_activate_files (GtkWindow               *parent_window,
  **/
 
 void
-nautilus_mime_activate_file (GtkWindow               *parent_window,
-                             NautilusWindowSlot      *slot,
-                             NautilusFile            *file,
-                             const char              *launch_directory,
-                             NautilusWindowOpenFlags  flags)
+nautilus_mime_activate_file (GtkWindow          *parent_window,
+                             NautilusWindowSlot *slot,
+                             NautilusFile       *file,
+                             const char         *launch_directory,
+                             NautilusOpenFlags   flags)
 {
     GList *files;
 
@@ -2283,14 +2282,14 @@ nautilus_mime_activate_file (GtkWindow               *parent_window,
     g_list_free (files);
 }
 
-gint
+guint
 nautilus_mime_types_get_number_of_groups (void)
 {
     return G_N_ELEMENTS (mimetype_groups);
 }
 
 const gchar *
-nautilus_mime_types_group_get_name (gint group_index)
+nautilus_mime_types_group_get_name (guint group_index)
 {
     g_return_val_if_fail (group_index < G_N_ELEMENTS (mimetype_groups), NULL);
 
@@ -2298,7 +2297,7 @@ nautilus_mime_types_group_get_name (gint group_index)
 }
 
 GPtrArray *
-nautilus_mime_types_group_get_mimetypes (gint group_index)
+nautilus_mime_types_group_get_mimetypes (guint group_index)
 {
     GStrv group;
     GPtrArray *mimetypes;
